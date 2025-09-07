@@ -1,0 +1,113 @@
+# Защита конфиденциальных файлов
+<Files "config.php">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+<Files "db.php">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+<Files "parser.php">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+<Files "schema.sql">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+<Files "*.log">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+# Запрет доступа к файлам с расширениями
+<Files ~ "\.(htaccess|htpasswd|ini|log|sh|sql|conf)$">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+# Защита от просмотра директорий
+Options -Indexes
+
+# Защита от включения файлов
+<Files ~ "\.(php|php3|php4|php5|phtml)$">
+    php_flag engine on
+</Files>
+
+# Запрет выполнения скриптов в uploads (если будут добавлены)
+<Directory "uploads/">
+    <Files ~ "\.(php|php3|php4|php5|phtml|exe|pl|cgi|scr)$">
+        Order Allow,Deny
+        Deny from all
+    </Files>
+</Directory>
+
+# Безопасные заголовки
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options nosniff
+    Header always set X-Frame-Options DENY
+    Header always set X-XSS-Protection "1; mode=block"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
+
+# Скрытие информации о сервере
+ServerSignature Off
+ServerTokens Prod
+
+# Защита от кликджекинга
+<IfModule mod_headers.c>
+    Header always append X-Frame-Options SAMEORIGIN
+</IfModule>
+
+# Кэширование статических ресурсов
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType text/css "access plus 1 month"
+    ExpiresByType application/javascript "access plus 1 month"
+    ExpiresByType image/png "access plus 1 month"
+    ExpiresByType image/jpg "access plus 1 month"
+    ExpiresByType image/jpeg "access plus 1 month"
+    ExpiresByType image/gif "access plus 1 month"
+    ExpiresByType image/svg+xml "access plus 1 month"
+</IfModule>
+
+# Сжатие контента
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/plain
+    AddOutputFilterByType DEFLATE text/html
+    AddOutputFilterByType DEFLATE text/xml
+    AddOutputFilterByType DEFLATE text/css
+    AddOutputFilterByType DEFLATE application/xml
+    AddOutputFilterByType DEFLATE application/xhtml+xml
+    AddOutputFilterByType DEFLATE application/rss+xml
+    AddOutputFilterByType DEFLATE application/javascript
+    AddOutputFilterByType DEFLATE application/x-javascript
+</IfModule>
+
+# Защита от хотлинкинга изображений (если будут добавлены изображения)
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{HTTP_REFERER} !^$
+    RewriteCond %{HTTP_REFERER} !^https?://(www\.)?new\.a-v-o\.ru [NC]
+    RewriteCond %{REQUEST_FILENAME} \.(gif|jpe?g|png)$ [NC]
+    RewriteRule . - [F,L]
+</IfModule>
+
+# Перенаправление HTTP на HTTPS
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{HTTPS} off
+    RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+</IfModule>
+
+# Защита от SQL injection через URL (упрощенная версия)
+<IfModule mod_rewrite.c>
+    RewriteCond %{QUERY_STRING} union.*select [NC,OR]
+    RewriteCond %{QUERY_STRING} \.\./ [NC,OR]
+    RewriteCond %{QUERY_STRING} \.\.\\ [NC]
+    RewriteRule ^.*$ - [F,L]
+</IfModule>

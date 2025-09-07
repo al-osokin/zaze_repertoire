@@ -1,0 +1,53 @@
+# Отладочная версия .htaccess - добавляйте правила по одному для тестирования
+
+# ФАЗА 1: Базовая защита файлов
+<Files "config.php">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+<Files "db.php">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+<Files "parser.php">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+<Files "schema.sql">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+# ФАЗА 2: Запрет просмотра директорий
+Options -Indexes
+
+# ФАЗА 3: HTTPS перенаправление (раскомментируйте для тестирования)
+# <IfModule mod_rewrite.c>
+#     RewriteEngine On
+#     RewriteCond %{HTTPS} off
+#     RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+# </IfModule>
+
+# ФАЗА 4: Безопасные заголовки (раскомментируйте для тестирования)
+# <IfModule mod_headers.c>
+#     Header always set X-Content-Type-Options nosniff
+#     Header always set X-Frame-Options DENY
+#     Header always set X-XSS-Protection "1; mode=block"
+# </IfModule>
+
+# ФАЗА 5: Кэширование (раскомментируйте для тестирования)
+# <IfModule mod_expires.c>
+#     ExpiresActive On
+#     ExpiresByType text/css "access plus 1 month"
+#     ExpiresByType application/javascript "access plus 1 month"
+# </IfModule>
+
+# ИНСТРУКЦИЯ:
+# 1. Начните с ФАЗЫ 1
+# 2. Протестируйте работу сайта
+# 3. Добавьте следующую фазу
+# 4. Повторяйте тестирование
+# 5. Когда появится ошибка - последнее добавленное правило виновато
