@@ -18,8 +18,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ];
 
         if (!empty($data['short_name']) && !empty($data['full_name']) && !empty($data['hall'])) {
-            savePlay($data);
-            $message = 'Спектакль сохранён';
+            $result = savePlay($data);
+            if ($result['success']) {
+                $message = $result['message'];
+                // Очищаем форму после успешного сохранения
+                if (!isset($data['id']) || !$data['id']) {
+                    $_POST = array();
+                }
+            } else {
+                $message = $result['message'];
+            }
         } else {
             $message = 'Заполните все обязательные поля';
         }
@@ -113,7 +121,7 @@ if (isset($_GET['edit'])) {
 
         <div class="section">
             <h2><?php echo $editPlay ? 'Редактировать спектакль' : 'Добавить спектакль'; ?></h2>
-            <form method="post">
+            <form method="post" id="playForm">
                 <?php if ($editPlay): ?>
                     <input type="hidden" name="play_id" value="<?php echo htmlspecialchars($editPlay['id']); ?>">
                 <?php endif; ?>
@@ -121,26 +129,31 @@ if (isset($_GET['edit'])) {
                 <div class="form-group">
                     <label for="short_name">Сокращение:</label>
                     <input type="text" id="short_name" name="short_name" value="<?php echo htmlspecialchars($editPlay['short_name'] ?? ''); ?>" required>
+                    <small class="form-hint">Уникальное сокращение для спектакля (например: "Тоска", "СП")</small>
                 </div>
 
                 <div class="form-group">
                     <label for="full_name">Полное название (с вики-разметкой):</label>
-                    <input type="text" id="full_name" name="full_name" value="<?php echo htmlspecialchars($editPlay['full_name'] ?? ''); ?>" required>
+                    <input type="text" id="full_name" name="full_name" value="<?php echo htmlspecialchars($editPlay['full_name'] ?? ($editPlay ? '' : '[[|]]')); ?>" required>
+                    <small class="form-hint">Полное название с вики-разметкой (например: "[[Летучая_мышь|Летучая мышь]]")</small>
                 </div>
 
                 <div class="form-group">
                     <label for="wiki_link">Ссылка для вики (без скобок):</label>
                     <input type="text" id="wiki_link" name="wiki_link" value="<?php echo htmlspecialchars($editPlay['wiki_link'] ?? ''); ?>">
+                    <small class="form-hint">Ссылка для вики (например: "Летучая_мышь" для [[Летучая_мышь|Летучая мышь]])</small>
                 </div>
 
                 <div class="form-group">
                     <label for="hall">Зал:</label>
                     <input type="text" id="hall" name="hall" value="<?php echo htmlspecialchars($editPlay['hall'] ?? ''); ?>" required>
+                    <small class="form-hint">Зал, в котором проходит спектакль</small>
                 </div>
 
                 <div class="form-group">
                     <label for="special_mark">Специальная отметка (например, "ПРЕМЬЕРА!"):</label>
                     <input type="text" id="special_mark" name="special_mark" value="<?php echo htmlspecialchars($editPlay['special_mark'] ?? ''); ?>" placeholder="Оставьте пустым для обычных спектаклей">
+                    <small class="form-hint">Специальная отметка (ПРЕМЬЕРА!, БЕНЕФИС и т.д.)</small>
                 </div>
 
                 <div class="form-group">
@@ -148,12 +161,16 @@ if (isset($_GET['edit'])) {
                         <input type="checkbox" id="is_subscription" name="is_subscription" value="1" <?php echo ($editPlay['is_subscription'] ?? 0) ? 'checked' : ''; ?>>
                         Это абонемент (использовать внешнюю ссылку на билеты)
                     </label>
+                    <small class="form-hint">Отметьте, если это абонемент с внешней ссылкой на билеты</small>
                 </div>
 
-                <button type="submit" name="save_play" class="btn-primary">Сохранить спектакль</button>
-                <?php if ($editPlay): ?>
-                    <a href="admin.php" class="btn-secondary" style="margin-left: 10px;">Отмена</a>
-                <?php endif; ?>
+                <div class="buttons">
+                    <button type="submit" name="save_play" class="btn-primary">Сохранить спектакль</button>
+                    <button type="button" class="btn-secondary" onclick="clearForm()">Очистить форму</button>
+                    <?php if ($editPlay): ?>
+                        <a href="admin.php" class="btn-secondary">Отмена</a>
+                    <?php endif; ?>
+                </div>
             </form>
         </div>
 
@@ -205,6 +222,30 @@ if (isset($_GET['edit'])) {
                 toast.classList.remove('show');
                 setTimeout(() => toast.remove(), 300);
             }, 3000);
+        }
+
+        // Функция для очистки формы
+        function clearForm() {
+            const form = document.getElementById('playForm');
+            if (form) {
+                form.reset();
+                // Очищаем скрытое поле с ID при добавлении нового спектакля
+                const playIdField = form.querySelector('input[name="play_id"]');
+                if (playIdField) {
+                    playIdField.value = '';
+                }
+                // Инициализируем поле full_name базовой вики-разметкой
+                const fullNameField = form.querySelector('input[name="full_name"]');
+                if (fullNameField) {
+                    fullNameField.value = '[[]]';
+                }
+                // Меняем заголовок на "Добавить спектакль"
+                const header = form.closest('.section').querySelector('h2');
+                if (header) {
+                    header.textContent = 'Добавить спектакль';
+                }
+                showToast('Форма очищена', 'info');
+            }
         }
 
         async function copyTemplate(shortName) {

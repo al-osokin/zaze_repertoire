@@ -15,20 +15,50 @@ function getPlayByShortName($shortName) {
     return $stmt->fetch();
 }
 
+function checkPlayExists($shortName, $excludeId = null) {
+    $pdo = getDBConnection();
+    if ($excludeId) {
+        $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM plays WHERE short_name = ? AND id != ?");
+        $stmt->execute([$shortName, $excludeId]);
+    } else {
+        $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM plays WHERE short_name = ?");
+        $stmt->execute([$shortName]);
+    }
+    $result = $stmt->fetch();
+    return $result['count'] > 0;
+}
+
 function savePlay($data) {
     $pdo = getDBConnection();
     $isSubscription = isset($data['is_subscription']) ? (int)$data['is_subscription'] : 0;
-
     $specialMark = $data['special_mark'] ?? '';
 
     if (isset($data['id']) && $data['id']) {
-        // Обновление
-        $stmt = $pdo->prepare("UPDATE plays SET short_name = ?, full_name = ?, wiki_link = ?, hall = ?, special_mark = ?, is_subscription = ? WHERE id = ?");
-        $stmt->execute([$data['short_name'], $data['full_name'], $data['wiki_link'], $data['hall'], $specialMark, $isSubscription, $data['id']]);
+        // Обновление - проверяем, не конфликтует ли новое сокращение с другими записями
+        if (checkPlayExists($data['short_name'], $data['id'])) {
+            return ['success' => false, 'message' => 'Спектакль с таким сокращением уже существует'];
+        }
+
+        try {
+            $stmt = $pdo->prepare("UPDATE plays SET short_name = ?, full_name = ?, wiki_link = ?, hall = ?, special_mark = ?, is_subscription = ? WHERE id = ?");
+            $stmt->execute([$data['short_name'], $data['full_name'], $data['wiki_link'], $data['hall'], $specialMark, $isSubscription, $data['id']]);
+            return ['success' => true, 'message' => 'Спектакль обновлён'];
+        } catch (PDOException $e) {
+            return ['success' => false, 'message' => 'Ошибка при обновлении спектакля: ' . $e->getMessage()];
+        }
     } else {
-        // Создание
-        $stmt = $pdo->prepare("INSERT INTO plays (short_name, full_name, wiki_link, hall, special_mark, is_subscription) VALUES (?, ?, ?, ?, ?, ?)");
-        $stmt->execute([$data['short_name'], $data['full_name'], $data['wiki_link'], $data['hall'], $specialMark, $isSubscription]);
+        // Создание - проверяем, не существует ли уже спектакль с таким сокращением
+        if (checkPlayExists($data['short_name'])) {
+            return ['success' => false, 'message' => 'Спектакль с таким сокращением уже существует'];
+        }
+
+        try {
+            $stmt = $pdo->prepare("INSERT INTO plays (short_name, full_name, wiki_link, hall, special_mark, is_subscription) VALUES (?, ?, ?, ?, ?, ?)");
+            $stmt->execute([$data['short_name'], $data['full_name'], $data['wiki_link'], $data['hall'], $specialMark, $isSubscription]);
+            return ['success' => true, 'message' => 'Спектакль добавлен'];
+        } catch (PDOException $e) {
+            return ['success' => false, 'message' => 'Ошибка при добавлении спектакля: ' . $e->getMessage()];
+        }
     }
 }
 
