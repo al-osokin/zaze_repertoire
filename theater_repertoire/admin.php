@@ -75,6 +75,8 @@ if (isset($_GET['edit'])) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Управление спектаклями - Репертуар театра</title>
     <link rel="stylesheet" href="css/main.css">
+    <link href="https://cdn.tailwindcss.com" rel="stylesheet">
+    <link rel="stylesheet" href="app/globals.css">
 </head>
 <body>
     <div class="container">
