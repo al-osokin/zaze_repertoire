@@ -10,6 +10,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $data = [
             'id' => $_POST['play_id'] ?? null,
             'short_name' => trim($_POST['short_name'] ?? ''),
+            'site_title' => trim($_POST['site_title'] ?? ''),
             'full_name' => trim($_POST['full_name'] ?? ''),
             'wiki_link' => trim($_POST['wiki_link'] ?? ''),
             'hall' => trim($_POST['hall'] ?? ''),
@@ -82,7 +83,10 @@ if (isset($_GET['edit'])) {
     <div class="container">
         <div class="header">
             <h1>Управление спектаклями</h1>
-            <a href="index.php" class="btn-secondary" style="padding: 10px 20px; text-decoration: none;">Назад к главной</a>
+            <div>
+                <a href="index.php" class="btn-secondary" style="padding: 10px 20px; text-decoration: none;">Главная</a>
+                <a href="scraper.php" class="btn-secondary" style="padding: 10px 20px; text-decoration: none; margin-left: 10px;">Парсинг афиши</a>
+            </div>
         </div>
 
         <?php if ($message): ?>
@@ -94,7 +98,7 @@ if (isset($_GET['edit'])) {
             <table>
                 <thead>
                     <tr>
-                        <th>Сокращение</th>
+                        <th>Название на сайте</th>
                         <th>Полное название</th>
                         <th>Зал</th>
                         <th>Действия</th>
@@ -103,7 +107,7 @@ if (isset($_GET['edit'])) {
                 <tbody>
                     <?php foreach ($plays as $play): ?>
                         <tr>
-                            <td><?php echo htmlspecialchars($play['short_name']); ?></td>
+                            <td><?php echo htmlspecialchars($play['site_title'] ?? ''); ?></td>
                             <td><?php echo htmlspecialchars($play['full_name']); ?></td>
                             <td><?php echo htmlspecialchars($play['hall']); ?></td>
                             <td class="actions">
@@ -132,6 +136,12 @@ if (isset($_GET['edit'])) {
                     <label for="short_name">Сокращение:</label>
                     <input type="text" id="short_name" name="short_name" value="<?php echo htmlspecialchars($editPlay['short_name'] ?? ''); ?>" required>
                     <small class="form-hint">Уникальное сокращение для спектакля (например: "Тоска", "СП")</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="site_title">Название на сайте:</label>
+                    <input type="text" id="site_title" name="site_title" value="<?php echo htmlspecialchars($editPlay['site_title'] ?? ''); ?>">
+                    <small class="form-hint">Точное название спектакля, как на сайте афиши (используется для автоматического сопоставления)</small>
                 </div>
 
                 <div class="form-group">
@@ -238,6 +248,10 @@ if (isset($_GET['edit'])) {
                 }
                 // Инициализируем поле full_name базовой вики-разметкой
                 const fullNameField = form.querySelector('input[name="full_name"]');
+                const siteTitleField = form.querySelector('input[name="site_title"]');
+                if (siteTitleField) {
+                    siteTitleField.value = '';
+                }
                 if (fullNameField) {
                     fullNameField.value = '[[]]';
                 }

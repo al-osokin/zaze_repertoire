@@ -62,6 +62,7 @@ DROP TABLE IF EXISTS `plays`;
 CREATE TABLE `plays` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `short_name` varchar(50) NOT NULL,
+  `site_title` varchar(255) DEFAULT NULL,
   `full_name` varchar(255) NOT NULL,
   `wiki_link` varchar(255) DEFAULT NULL,
   `hall` varchar(100) NOT NULL,
@@ -81,7 +82,7 @@ CREATE TABLE `plays` (
 
 LOCK TABLES `plays` WRITE;
 /*!40000 ALTER TABLE `plays` DISABLE KEYS */;
-INSERT INTO `plays` VALUES
+INSERT INTO `plays` (`id`,`short_name`,`full_name`,`wiki_link`,`hall`,`special_mark`,`is_subscription`,`created_at`,`updated_at`) VALUES
 (1,'Тоска','[[Тоска]]','Тоска','Большой зал','ПРЕМЬЕРА!',0,'2025-09-07 02:43:46','2025-09-07 02:43:46'),
 (2,'Летучка','[[Летучая_мышь|Летучая мышь]]','Летучая_мышь','Большой зал','',0,'2025-09-07 02:43:46','2025-09-07 02:43:46'),
 (3,'Любимая','[[Любимая_игрушка|Любимая игрушка]]','Любимая_игрушка','Белый зал','',0,'2025-09-07 02:43:46','2025-09-07 02:43:46'),
@@ -155,6 +156,39 @@ CREATE TABLE `repertoire_history` (
   `created_at` timestamp NULL DEFAULT current_timestamp(),
   PRIMARY KEY (`id`),
   KEY `idx_repertoire_history_month_year` (`month_year`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `events_raw`
+--
+
+DROP TABLE IF EXISTS `events_raw`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `events_raw` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `batch_token` char(36) NOT NULL,
+  `event_date` date NOT NULL,
+  `event_time` time NOT NULL,
+  `title` varchar(255) NOT NULL,
+  `normalized_title` varchar(255) DEFAULT NULL,
+  `age_category` varchar(100) DEFAULT NULL,
+  `ticket_code` varchar(20) DEFAULT NULL,
+  `ticket_url` varchar(255) DEFAULT NULL,
+  `repertoire_url` varchar(255) DEFAULT NULL,
+  `background_url` varchar(255) DEFAULT NULL,
+  `play_id` int(11) DEFAULT NULL,
+  `play_short_name` varchar(50) DEFAULT NULL,
+  `month` tinyint(4) NOT NULL,
+  `year` smallint(6) NOT NULL,
+  `created_at` timestamp NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_batch_event` (`batch_token`,`event_date`,`event_time`,`title`),
+  KEY `idx_events_raw_month_year` (`year`,`month`),
+  KEY `idx_events_raw_ticket_code` (`ticket_code`),
+  CONSTRAINT `events_raw_ibfk_1` FOREIGN KEY (`play_id`) REFERENCES `plays` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
