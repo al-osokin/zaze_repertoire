@@ -4,7 +4,7 @@ require_once 'config.php';
 // Функции для работы со спектаклями
 function getAllPlays() {
     $pdo = getDBConnection();
-    $stmt = $pdo->query("SELECT * FROM plays ORDER BY short_name");
+    $stmt = $pdo->query("SELECT * FROM plays ORDER BY site_title");
     return $stmt->fetchAll();
 }
 
