@@ -217,4 +217,137 @@ function updateVkPostText($eventId, $text) {
     $stmt->execute([$text, $eventId]);
 }
 
+function buildPerformanceCard(int $performanceId, bool $includePhoto = true): array {
+    $pdo = getDBConnection();
+
+    $result = [
+        'text' => '',
+        'has_artists' => false,
+        'play_id' => null,
+        'ticket_code' => null,
+    ];
+
+    $perfStmt = $pdo->prepare("SELECT play_id, ticket_code FROM events_raw WHERE id = ?");
+    $perfStmt->execute([$performanceId]);
+    $performance = $perfStmt->fetch();
+    if (!$performance) {
+        return $result;
+    }
+
+    $result['play_id'] = (int)$performance['play_id'];
+    $result['ticket_code'] = $performance['ticket_code'] ?? null;
+
+    $rolesStmt = $pdo->prepare("
+        SELECT
+            r.role_name,
+            r.role_description,
+            pra.role_id,
+            pra.artist_id,
+            pra.custom_artist_name,
+            pra.is_first_time,
+            a.first_name,
+            a.last_name
+        FROM performance_roles_artists pra
+        JOIN roles r ON pra.role_id = r.role_id
+        LEFT JOIN artists a ON pra.artist_id = a.artist_id
+        WHERE pra.performance_id = ?
+        ORDER BY r.sort_order, pra.sort_order_in_role
+    ");
+    $rolesStmt->execute([$performanceId]);
+    $castData = $rolesStmt->fetchAll();
+
+    $groupedCast = [];
+    foreach ($castData as $cast) {
+        $roleKey = $cast['role_name'] . ($cast['role_description'] ?? '');
+        if (!isset($groupedCast[$roleKey])) {
+            $groupedCast[$roleKey] = [
+                'name' => $cast['role_name'],
+                'description' => $cast['role_description'],
+                'artists' => [],
+            ];
+        }
+
+        $firstTimeSuffix = !empty($cast['is_first_time']) ? " (''впервые в роли'')" : '';
+
+        if (!empty($cast['artist_id'])) {
+            $artistName = trim(($cast['first_name'] ?? '') . ' ' . ($cast['last_name'] ?? ''));
+            if ($artistName !== '') {
+                $groupedCast[$roleKey]['artists'][] = $artistName . $firstTimeSuffix;
+            }
+        } elseif (!empty($cast['custom_artist_name'])) {
+            $customName = trim($cast['custom_artist_name']);
+            if ($customName !== '' && mb_strtoupper($customName, 'UTF-8') !== 'СОСТАВ УТОЧНЯЕТСЯ') {
+                $groupedCast[$roleKey]['artists'][] = $customName . $firstTimeSuffix;
+            }
+        }
+    }
+
+    $regularLines = [];
+    $specialLines = [];
+    foreach ($groupedCast as $role) {
+        if (empty($role['artists'])) {
+            continue;
+        }
+
+        $description = $role['description'] ? ', ' . $role['description'] : '';
+        $line = "'''" . $role['name'] . "'''" . $description . ' — ' . implode(', ', $role['artists']);
+
+        $normalizedName = mb_strtolower($role['name']);
+        $isSpecial = (
+            mb_stripos($normalizedName, 'дириж') !== false ||
+            mb_stripos($normalizedName, 'клавесин') !== false ||
+            mb_stripos($normalizedName, 'концертмейстер') !== false ||
+            mb_stripos($normalizedName, 'джазбо-браун') !== false
+        );
+
+        if ($isSpecial) {
+            $specialLines[] = $line;
+        } else {
+            $regularLines[] = $line;
+        }
+    }
+
+    $hasArtists = !empty($regularLines) || !empty($specialLines);
+    if (!$hasArtists) {
+        return $result;
+    }
+
+    $lines = ["==В ролях:=="];
+    foreach ($regularLines as $line) {
+        $lines[] = $line;
+    }
+
+    $photoAdded = false;
+    if ($includePhoto) {
+        $tplStmt = $pdo->prepare("SELECT template_text FROM play_templates WHERE play_id = ?");
+        $tplStmt->execute([$result['play_id']]);
+        $template = $tplStmt->fetchColumn();
+        if ($template && preg_match('/\\[\\[photo[^\\]]*\\]\\]/iu', $template, $photoMatch)) {
+            $lines[] = '';
+            $lines[] = trim($photoMatch[0]);
+            $lines[] = '';
+            $photoAdded = true;
+        }
+    }
+
+    if (!empty($specialLines)) {
+        if (!$photoAdded) {
+            $lines[] = '';
+        }
+        foreach ($specialLines as $line) {
+            $lines[] = $line;
+        }
+    }
+
+    if (!empty($performance['ticket_code'])) {
+        $lines[] = '';
+        $lines[] = "'''[http://www.zazerkал.spb.ru/tickets/" . $performance['ticket_code'] . ".htm|КУПИТЬ БИЛЕТ]'''";
+    }
+
+    $result['text'] = implode("\n", $lines);
+    $result['has_artists'] = true;
+
+    return $result;
+}
+
 ?>

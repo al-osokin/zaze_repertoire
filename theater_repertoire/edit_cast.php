@@ -297,60 +297,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 }
 
 // Генерация Wiki-карточки
+$cardRequest = ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'generate_card');
 $generatedWikiCard = '';
-if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'generate_card') || isset($_GET['show_card'])) {
-    $stmt = $pdo->prepare("
-        SELECT r.role_name, r.role_description, a.first_name, a.last_name, pra.custom_artist_name, pra.is_first_time, pra.role_id, pra.sort_order_in_role, pra.artist_id
-        FROM performance_roles_artists pra
-        JOIN roles r ON pra.role_id = r.role_id
-        LEFT JOIN artists a ON pra.artist_id = a.artist_id
-        WHERE pra.performance_id = ?
-        ORDER BY r.sort_order, pra.sort_order_in_role
-    ");
-    $stmt->execute([$performanceId]);
-    $castData = $stmt->fetchAll();
+if ($cardRequest || isset($_GET['show_card'])) {
+    $cardData = buildPerformanceCard($performanceId, true);
 
-    $groupedCast = [];
-    foreach ($castData as $cast) {
-        $roleKey = $cast['role_name'] . ($cast['role_description'] ?? '');
-        if (!isset($groupedCast[$roleKey])) {
-            $groupedCast[$roleKey] = [
-                'name' => $cast['role_name'],
-                'description' => $cast['role_description'],
-                'artists' => []
-            ];
-        }
-        $firstTimeSuffix = !empty($cast['is_first_time']) ? " (''впервые в роли'')" : '';
-
-        if ($cast['artist_id']) {
-            $artistName = trim($cast['first_name'] . ' ' . $cast['last_name']);
-            $groupedCast[$roleKey]['artists'][] = $artistName . $firstTimeSuffix;
-        } elseif (!empty($cast['custom_artist_name'])) {
-            $groupedCast[$roleKey]['artists'][] = $cast['custom_artist_name'] . $firstTimeSuffix;
-        }
-    }
-
-    if ($groupedCast) {
-        $generatedWikiCard = "==В ролях:==\n";
-        foreach ($groupedCast as $role) {
-            if (empty($role['artists'])) continue;
-            
-            $description = $role['description'] ? ', ' . $role['description'] : '';
-            $generatedWikiCard .= "'''" . $role['name'] . "'''" . $description . " — " . implode(', ', $role['artists']) . "\n";
-        }
-        
-        $ticketCodeStmt = $pdo->prepare("SELECT ticket_code FROM events_raw WHERE id = ?");
-        $ticketCodeStmt->execute([$performanceId]);
-        $ticketCode = $ticketCodeStmt->fetchColumn();
-
-        if ($ticketCode) {
-             $generatedWikiCard .= "\n'''[http://www.zazerkal.spb.ru/tickets/" . $ticketCode . ".htm|КУПИТЬ БИЛЕТ]'''";
-        }
-        
-        // Сохраняем в БД
+    if (!$cardData['has_artists']) {
+        $message = "Состав не заполнен, карточку генерировать не из чего.";
+    } else {
+        $generatedWikiCard = $cardData['text'];
         updateVkPostText($performanceId, $generatedWikiCard);
 
-        // Запоминаем текущий состав для будущих показов этого спектакля
         try {
             $pdo->beginTransaction();
 
@@ -393,11 +350,11 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST[
             $pdo->rollBack();
             error_log("Не удалось сохранить состав по умолчанию для спектакля {$performance['play_id']}: " . $e->getMessage());
         }
+
         $message = "Карточка сгенерирована и сохранена.";
-    } else {
-        $message = "Состав не заполнен, карточку генерировать не из чего.";
     }
 }
+
 ?>
 <!DOCTYPE html>
 <html lang="ru">
@@ -491,7 +448,7 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST[
         </form>
     </div>
 
-    <div class="section">
+    <div class="section" id="card-section">
         <h2>Сгенерировать карточку</h2>
         <form method="post">
             <input type="hidden" name="action" value="generate_card">
@@ -582,13 +539,64 @@ document.addEventListener('change', function(e) {
 
 function copyToClipboard(elementId) {
     const textArea = document.getElementById(elementId);
-    textArea.select();
-    navigator.clipboard.writeText(textArea.value).then(function() {
-        alert('Текст скопирован в буфер обмена!');
-    }, function(err) {
-        alert('Ошибка при копировании текста: ', err);
+    if (!textArea) return;
+
+    const value = textArea.value.trim();
+    if (!value) {
+        showToast('Нет текста для копирования', 'error');
+        return;
+    }
+
+    const copyPromise = (navigator.clipboard && typeof navigator.clipboard.writeText === 'function')
+        ? navigator.clipboard.writeText(value)
+        : new Promise((resolve, reject) => {
+            const temp = document.createElement('textarea');
+            temp.value = value;
+            temp.setAttribute('readonly', '');
+            temp.style.position = 'absolute';
+            temp.style.left = '-9999px';
+            document.body.appendChild(temp);
+            temp.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(temp);
+            ok ? resolve() : reject(new Error('не удалось скопировать текст'));
+        });
+
+    copyPromise.then(() => {
+        showToast('Текст карточки скопирован', 'success');
+    }).catch((err) => {
+        console.error(err);
+        showToast(`Ошибка: ${err.message || err}`, 'error');
     });
 }
+
+function showToast(message, type = 'success') {
+    const existingToast = document.querySelector('.toast');
+    if (existingToast) {
+        existingToast.remove();
+    }
+
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+
+    requestAnimationFrame(() => toast.classList.add('show'));
+
+    setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
+<?php if ($cardRequest || isset($_GET['show_card'])): ?>
+window.addEventListener('load', () => {
+    const section = document.getElementById('card-section');
+    if (section) {
+        section.scrollIntoView({behavior: 'smooth', block: 'start'});
+    }
+});
+<?php endif; ?>
 </script>
 
 </body>

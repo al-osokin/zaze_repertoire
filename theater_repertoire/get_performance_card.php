@@ -14,7 +14,7 @@ $performanceId = (int)$_GET['performance_id'];
 $pdo = getDBConnection();
 
 $stmt = $pdo->prepare("
-    SELECT er.vk_post_text, er.event_date, er.event_time, p.full_name
+    SELECT er.event_date, er.event_time, p.full_name
     FROM events_raw er
     LEFT JOIN plays p ON er.play_id = p.id
     WHERE er.id = ?
@@ -27,7 +27,10 @@ if (!$data) {
     exit;
 }
 
-if (empty(trim($data['vk_post_text'] ?? ''))) {
+
+$card = buildPerformanceCard($performanceId, true);
+
+if (!$card['has_artists']) {
     echo json_encode([
         'success' => false,
         'message' => 'Карточка ещё не сгенерирована для этого представления',
@@ -38,7 +41,7 @@ if (empty(trim($data['vk_post_text'] ?? ''))) {
 
 echo json_encode([
     'success' => true,
-    'text' => $data['vk_post_text'],
+    'text' => $card['text'],
     'play_name' => $data['full_name'] ?? '',
     'event_date' => $data['event_date'],
     'event_time' => $data['event_time']

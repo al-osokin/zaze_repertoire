@@ -94,7 +94,7 @@ $performances = $stmt->fetchAll();
                              <button type="button"
                                      class="btn-icon btn-success btn-copy"
                                      title="Копировать карточку"
-                                     onclick="copyPerformanceCard(<?php echo (int)$performance['performance_id']; ?>, <?php echo json_encode($performance['play_name']); ?>)">
+                                     onclick="copyPerformanceCard(<?php echo (int)$performance['performance_id']; ?>, <?php echo htmlspecialchars(json_encode($performance['play_name']), ENT_QUOTES, 'UTF-8'); ?>)">
                              </button>
                         </td>
                     </tr>
@@ -126,23 +126,56 @@ $performances = $stmt->fetchAll();
 
         async function copyPerformanceCard(performanceId, playName = '') {
             try {
-                const response = await fetch(`get_performance_card.php?performance_id=${encodeURIComponent(performanceId)}`);
+                const response = await fetch(
+                    `get_performance_card.php?performance_id=${encodeURIComponent(performanceId)}`,
+                    { credentials: 'same-origin' }
+                );
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}`);
                 }
 
-                const data = await response.json();
+                const contentType = response.headers.get('Content-Type') || '';
+                const payload = contentType.includes('application/json')
+                    ? await response.json()
+                    : { success: false, message: 'Получен неожиданный ответ сервера' };
+
+                const data = payload;
                 if (!data.success) {
                     showToast(data.message || 'Карточка не найдена', 'error');
                     return;
                 }
 
-                await navigator.clipboard.writeText(data.text);
+                await copyTextToClipboard(data.text);
                 const name = data.play_name || playName || 'спектакль';
                 showToast(`Карточка для "${name}" скопирована!`, 'success');
             } catch (error) {
                 console.error(error);
                 showToast(`Ошибка копирования: ${error.message}`, 'error');
+            }
+        }
+
+        async function copyTextToClipboard(text) {
+            const cleaned = (text || '').trim();
+            if (!cleaned) {
+                throw new Error('Пустой текст карточки');
+            }
+
+            if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                await navigator.clipboard.writeText(cleaned);
+                return;
+            }
+
+            const textarea = document.createElement('textarea');
+            textarea.value = cleaned;
+            textarea.setAttribute('readonly', '');
+            textarea.style.position = 'absolute';
+            textarea.style.left = '-9999px';
+            document.body.appendChild(textarea);
+            textarea.select();
+            const successful = document.execCommand('copy');
+            document.body.removeChild(textarea);
+            if (!successful) {
+                throw new Error('Не удалось скопировать текст');
             }
         }
     </script>
