@@ -148,8 +148,12 @@ foreach ($allArtists as $artist) {
     $allArtistsByTypeList[$typeKey][] = $artist;
 }
 
+$roleArtistExclusions = [
+    // 264 => [170], // пример исключений ролей
+];
+
 // Функция для получения и сортировки артистов для конкретной роли
-function getArtistsForRole($pdo, $roleId, $artistType, $allArtistsByTypeList) {
+function getArtistsForRole($pdo, $roleId, $artistType, $allArtistsByTypeList, array $roleArtistExclusions = []) {
     $typesForRole = [$artistType];
     if ($artistType === 'artist') {
         $typesForRole[] = 'group';
@@ -168,6 +172,14 @@ function getArtistsForRole($pdo, $roleId, $artistType, $allArtistsByTypeList) {
     $frequentArtistsStmt->execute(array_merge([$roleId], $typesForRole));
     $frequentArtists = $frequentArtistsStmt->fetchAll();
 
+    $excludedIds = $roleArtistExclusions[$roleId] ?? [];
+    if (!empty($excludedIds)) {
+        $frequentArtists = array_values(array_filter(
+            $frequentArtists,
+            fn($artist) => !in_array($artist['artist_id'], $excludedIds, true)
+        ));
+    }
+
     // Получаем всех артистов нужного типа, отсортированных по фамилии
     $allArtistsOfType = [];
     foreach ($typesForRole as $typeKey) {
@@ -185,7 +197,11 @@ function getArtistsForRole($pdo, $roleId, $artistType, $allArtistsByTypeList) {
     $frequentArtistIds = array_map(fn($a) => $a['artist_id'], $frequentArtists);
 
     // Фильтруем всех артистов, чтобы убрать тех, кто уже в списке частых
-    $otherArtists = array_filter($sortedArtists, fn($a) => !in_array($a['artist_id'], $frequentArtistIds));
+    $otherArtists = array_filter(
+        $sortedArtists,
+        fn($a) => !in_array($a['artist_id'], $frequentArtistIds, true)
+            && (empty($excludedIds) || !in_array($a['artist_id'], $excludedIds, true))
+    );
 
     // Объединяем: частые артисты + остальные артисты (по алфавиту)
     return array_merge($frequentArtists, $otherArtists);
@@ -440,7 +456,7 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST[
                                     <select name="roles[<?php echo $role['role_id']; ?>][<?php echo $idx; ?>][artist_id]" class="artist-select">
                                         <option value="">-- СОСТАВ УТОЧНЯЕТСЯ --</option>
                                         <?php
-                                        $artistsForRole = getArtistsForRole($pdo, $role['role_id'], $role['expected_artist_type'], $allArtistsByTypeList);
+                                        $artistsForRole = getArtistsForRole($pdo, $role['role_id'], $role['expected_artist_type'], $allArtistsByTypeList, $roleArtistExclusions);
                                         foreach ($artistsForRole as $artist): ?>
                                             <option value="<?php echo $artist['artist_id']; ?>" <?php echo ($assigned['artist_id'] == $artist['artist_id']) ? 'selected' : ''; ?>>
                                                 <?php echo htmlspecialchars($artist['last_name'] . ' ' . $artist['first_name']); ?>

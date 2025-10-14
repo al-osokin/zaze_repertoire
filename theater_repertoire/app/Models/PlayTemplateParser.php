@@ -19,7 +19,7 @@ class PlayTemplateParser
     public function parseTemplate(int $playId, string $templateText): array
     {
         $rolesData = [];
-        $lines = explode("\n", $templateText);
+        $lines = preg_split("/\r\n|\r|\n/", $templateText);
         $currentSortOrder = 0; // Для упорядочивания ролей
 
         foreach ($lines as $line) {
@@ -50,91 +50,124 @@ class PlayTemplateParser
                 continue;
             }
 
-            // Регекс для строк ролей с артистами: '''Роль''', описание — Артист1, Артист2
-            if (preg_match('/^\'\'\'([^\'\'\']+)\'\'\'(?:,\s*([^—]+))?\s*—\s*(.+)/u', $line, $matches)) {
-                $roleName = trim($matches[1]);
-                $roleDescription = isset($matches[2]) ? trim($matches[2]) : null;
-                $artistNamesStr = trim($matches[3]);
-                $initialArtists = [];
-                $expectedArtistType = 'artist';
-
-                // Определяем тип исполнителя по названию роли
-                if (mb_stripos($roleName, 'Дирижёр') !== false) {
-                    $expectedArtistType = 'conductor';
-                } elseif (mb_stripos($roleName, 'Клавесин') !== false || mb_stripos($roleName, 'Концертмейстер') !== false) {
-                    $expectedArtistType = 'pianist';
-                }
-                // Можно добавить другие условия для 'other'
-
-                // Разделяем строку артистов на отдельные имена
-                $artistNames = array_map('trim', explode(',', $artistNamesStr));
-                foreach ($artistNames as $artistFullName) {
-                    $artistFullName = trim($artistFullName);
-                    if (empty($artistFullName)) continue;
-
-                    $parts = explode(' ', $artistFullName);
-                    $firstName = '';
-                    $lastName = '';
-
-                    $knownGroupNames = ['Ансамбль', 'Хор', 'Детский хор']; // Список известных групповых названий
-
-                    if (in_array($artistFullName, $knownGroupNames)) {
-                        // Если это известное групповое название, сохраняем его целиком как фамилию
-                        $lastName = $artistFullName;
-                        $firstName = '';
-                    } elseif (count($parts) === 1) {
-                        // Однословное имя или фамилия (например, "Иванов" или "Анна")
-                        $lastName = $artistFullName;
-                        $firstName = '';
-                    } elseif (count($parts) > 1) {
-                        // Многословное имя, предполагаем формат "Имя Фамилия"
-                        $lastName = array_pop($parts);
-                        $firstName = implode(' ', $parts);
-                    }
-
-                    $artistId = $this->findOrCreateArtist($firstName, $lastName, $expectedArtistType);
-                    if ($artistId) {
-                        $initialArtists[] = $artistId;
-                    }
-                }
-
-                $rolesData[] = [
-                    'role_name' => $roleName,
-                    'role_description' => $roleDescription,
-                    'expected_artist_type' => $expectedArtistType,
-                    'initial_artists' => $initialArtists,
-                    'sort_order' => $currentSortOrder++
-                ];
-            } else {
-                // Если есть роли без артистов (которые не являются СОСТАВ УТОЧНЯЕТСЯ)
-                // Пример: '''Некая роль'''
+            // Попытка разобрать строки с ролями и артистами
+            if (!str_contains($line, '—')) {
                 if (preg_match('/^\'\'\'([^\'\'\']+)\'\'\'(?:,\s*([^—]+))?\s*$/u', $line, $matches)) {
-                    $roleName = trim($matches[1]);
+                    $roleName = trim(str_replace(["'''", "''"], '', $matches[1]));
                     $roleDescription = isset($matches[2]) ? trim($matches[2]) : null;
-                    $expectedArtistType = 'artist'; // По умолчанию
-
-                    // Определяем тип исполнителя по названию роли
-                    if (mb_stripos($roleName, 'Дирижёр') !== false) {
-                        $expectedArtistType = 'conductor';
-                    } elseif (mb_stripos($roleName, 'Клавесин') !== false || mb_stripos($roleName, 'Концертмейстер') !== false) {
-                        $expectedArtistType = 'pianist';
+                    if ($roleDescription !== null && $roleDescription === '') {
+                        $roleDescription = null;
                     }
+                    $expectedArtistType = $this->detectExpectedArtistType($roleName);
 
                     $rolesData[] = [
                         'role_name' => $roleName,
                         'role_description' => $roleDescription,
                         'expected_artist_type' => $expectedArtistType,
-                        'initial_artists' => [], // Нет начальных артистов
+                        'initial_artists' => [],
                         'sort_order' => $currentSortOrder++
                     ];
                 }
+                continue;
             }
+
+            $parts = preg_split('/\s+—\s+/u', $line, 2);
+            if (!$parts || count($parts) < 2) {
+                continue;
+            }
+
+            [$rawRolePart, $artistNamesStr] = array_map('trim', $parts);
+            if ($artistNamesStr === '') {
+                continue;
+            }
+
+            $cleanRolePart = preg_replace('/\s+/u', ' ', trim(str_replace(["'''", "''"], '', $rawRolePart)));
+            if ($cleanRolePart === '') {
+                continue;
+            }
+
+            $roleName = $cleanRolePart;
+            $roleDescription = null;
+
+            if (preg_match('/^(.+?),\s*(.+)$/u', $cleanRolePart, $roleMatches)) {
+                $roleName = trim($roleMatches[1]);
+                $roleDescription = trim($roleMatches[2]);
+            }
+            if ($roleDescription !== null && $roleDescription === '') {
+                $roleDescription = null;
+            }
+
+            $expectedArtistType = $this->detectExpectedArtistType($roleName);
+
+            $artistNames = array_map('trim', explode(',', $artistNamesStr));
+            $initialArtists = [];
+
+            foreach ($artistNames as $artistFullName) {
+                $artistFullName = trim(str_replace(["'''", "''"], '', $artistFullName));
+                if ($artistFullName === '') {
+                    continue;
+                }
+
+                // Убираем пометки вида (''впервые в роли'') или (впервые в роли)
+                $artistFullName = preg_replace("/\\(''+.*?''\\)/u", '', $artistFullName);
+                $artistFullName = preg_replace("/\(([^)]*впервые в роли[^)]*)\)/iu", '', $artistFullName);
+                $artistFullName = preg_replace('/\s+/u', ' ', trim($artistFullName));
+                if ($artistFullName === '') {
+                    continue;
+                }
+
+                $firstName = '';
+                $lastName = '';
+
+                $knownGroupNames = ['Ансамбль', 'ансамбль', 'Хор', 'хор', 'Детский хор', 'оркестр', 'Оркестр'];
+                if (in_array($artistFullName, $knownGroupNames, true)) {
+                    $lastName = $artistFullName;
+                } else {
+                    $parts = preg_split('/\s+/u', $artistFullName);
+                    if (count($parts) === 1) {
+                        $lastName = $artistFullName;
+                    } else {
+                        $lastName = array_pop($parts);
+                        $firstName = implode(' ', $parts);
+                    }
+                }
+
+                $artistId = $this->findOrCreateArtist($firstName, $lastName, $expectedArtistType);
+                if ($artistId) {
+                    $initialArtists[] = $artistId;
+                }
+            }
+
+            $rolesData[] = [
+                'role_name' => $roleName,
+                'role_description' => $roleDescription,
+                'expected_artist_type' => $expectedArtistType,
+                'initial_artists' => $initialArtists,
+                'sort_order' => $currentSortOrder++
+            ];
         }
         
         // Теперь сохраняем распарсенные роли в БД
         $this->saveParsedRoles($playId, $rolesData);
 
         return $rolesData;
+    }
+
+    private function detectExpectedArtistType(string $roleName): string
+    {
+        if (mb_stripos($roleName, 'Дирижёр') !== false || mb_stripos($roleName, 'Дирижер') !== false) {
+            return 'conductor';
+        }
+
+        if (
+            mb_stripos($roleName, 'Клавесин') !== false ||
+            mb_stripos($roleName, 'Концертмейстер') !== false ||
+            mb_stripos($roleName, 'Пианист') !== false
+        ) {
+            return 'pianist';
+        }
+
+        return 'artist';
     }
 
     /**
@@ -183,9 +216,18 @@ class PlayTemplateParser
     private function saveParsedRoles(int $playId, array $rolesData): void
     {
         foreach ($rolesData as $role) {
+            $roleName = $role['role_name'];
+            $roleDescription = $role['role_description'];
+            if ($roleDescription !== null) {
+                $roleDescription = trim($roleDescription);
+                if ($roleDescription === '') {
+                    $roleDescription = null;
+                }
+            }
+
             // Ищем роль. Если есть - обновляем, иначе создаем
             $stmt = $this->pdo->prepare("SELECT role_id FROM roles WHERE play_id = ? AND role_name = ? AND (role_description = ? OR (role_description IS NULL AND ? IS NULL))");
-            $stmt->execute([$playId, $role['role_name'], $role['role_description'], $role['role_description']]);
+            $stmt->execute([$playId, $roleName, $roleDescription, $roleDescription]);
             $roleId = $stmt->fetchColumn();
 
             if ($roleId) {
@@ -195,7 +237,7 @@ class PlayTemplateParser
             } else {
                 // Создаем новую роль
                 $stmt = $this->pdo->prepare("INSERT INTO roles (play_id, role_name, role_description, expected_artist_type, sort_order) VALUES (?, ?, ?, ?, ?)");
-                $stmt->execute([$playId, $role['role_name'], $role['role_description'], $role['expected_artist_type'], $role['sort_order']]);
+                $stmt->execute([$playId, $roleName, $roleDescription, $role['expected_artist_type'], $role['sort_order']]);
                 $roleId = $this->pdo->lastInsertId();
             }
 
