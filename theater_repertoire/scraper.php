@@ -58,11 +58,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             foreach ($parsedEvents as $event) {
-                insertRawEvent(array_merge($event, [
+                $eventId = insertRawEvent(array_merge($event, [
                     'batch_token' => $batchToken,
                     'month' => $selectedMonth,
                     'year' => $selectedYear,
                 ]));
+
+                // Сразу создаем базовый шаблон для VK
+                if ($eventId && !empty($event['ticket_code'])) {
+                    $templateText = sprintf(
+                        "==В ролях:==\n''СОСТАВ УТОЧНЯЕТСЯ''\n\n'''[http://www.zazerkal.spb.ru/tickets/%s.htm|КУПИТЬ БИЛЕТ]'''",
+                        $event['ticket_code']
+                    );
+                    updateVkPostText($eventId, $templateText);
+                }
             }
 
             if ($batchToken) {
@@ -224,6 +233,7 @@ function playSiteTitle(array $play): string
             <h1>Парсинг афиши</h1>
             <div>
                 <a href="index.php" class="btn-secondary" style="padding: 10px 20px; text-decoration: none;">Главная</a>
+                <a href="schedule.php" class="btn-primary" style="padding: 10px 20px; text-decoration: none; margin-left: 10px;">Управление составами</a>
                 <a href="admin.php" class="btn-secondary" style="padding: 10px 20px; text-decoration: none; margin-left: 10px;">Спектакли</a>
             </div>
         </div>

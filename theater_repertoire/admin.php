@@ -112,7 +112,8 @@ if (isset($_GET['edit'])) {
                             <td><?php echo htmlspecialchars($play['hall']); ?></td>
                             <td class="actions">
                                 <a href="admin.php?edit=<?php echo urlencode($play['short_name']); ?>" class="btn-icon btn-secondary btn-edit" title="Редактировать спектакль"></a>
-                                <a href="admin.php?template=<?php echo urlencode($play['short_name']); ?>" class="btn-icon btn-primary btn-cast" title="Редактировать состав"></a>
+                                <a href="roles_admin.php?play_id=<?php echo $play['id']; ?>" class="btn-icon btn-info btn-roles" title="Управление ролями"></a>
+                                <a href="admin.php?template=<?php echo urlencode($play['short_name']); ?>" class="btn-icon btn-primary btn-cast" title="Редактировать шаблон"></a>
                                 <button type="button" class="btn-icon btn-success btn-copy" title="Копировать шаблон" onclick="copyTemplate('<?php echo htmlspecialchars($play['short_name']); ?>')"></button>
                                 <form method="post" style="display: inline;">
                                     <input type="hidden" name="play_id" value="<?php echo $play['id']; ?>">

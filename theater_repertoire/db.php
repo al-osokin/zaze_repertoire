@@ -1,4 +1,5 @@
 <?php
+// Force reload
 require_once 'config.php';
 
 // Функции для работы со спектаклями
@@ -177,6 +178,7 @@ function insertRawEvent($eventData) {
         $values[] = $eventData[$column] ?? null;
     }
     $stmt->execute($values);
+    return $pdo->lastInsertId();
 }
 
 function getRawEventsByBatch($batchToken) {
@@ -208,4 +210,11 @@ function updateEventPlayMapping($eventId, $playId = null) {
     $stmt = $pdo->prepare("UPDATE events_raw SET play_id = ?, play_short_name = ? WHERE id = ?");
     $stmt->execute([$playId, $playShortName, $eventId]);
 }
+
+function updateVkPostText($eventId, $text) {
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("UPDATE events_raw SET vk_post_text = ? WHERE id = ?");
+    $stmt->execute([$text, $eventId]);
+}
+
 ?>

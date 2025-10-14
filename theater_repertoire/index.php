@@ -33,18 +33,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['logout'])) {
         <div class="section">
             <h2>Быстрые действия</h2>
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px;">
-                <a href="scraper.php" class="btn-primary" style="justify-content: center; font-size: 16px; padding: 18px;">Парсинг афиши</a>
-                <a href="manual.php" class="btn-secondary" style="justify-content: center; font-size: 16px; padding: 18px;">Создать вручную</a>
+                <a href="scraper.php" class="btn-secondary" style="justify-content: center; font-size: 16px; padding: 18px;">Парсинг афиши</a>
+                <a href="schedule.php" class="btn-primary" style="justify-content: center; font-size: 16px; padding: 18px;">Заполнение составов</a>
                 <a href="admin.php" class="btn-secondary" style="justify-content: center; font-size: 16px; padding: 18px;">Управление спектаклями</a>
+                <a href="manual.php" class="btn-secondary" style="justify-content: center; font-size: 16px; padding: 18px;">Создать вручную</a>
             </div>
         </div>
 
         <div class="section">
             <h2>Справка</h2>
             <ul style="margin: 0; padding-left: 18px; line-height: 1.8;">
-                <li><strong>Парсинг афиши</strong> — загрузите расписание с сайта театра, скорректируйте сопоставление спектаклей и получите wiki-разметку.</li>
-                <li><strong>Создать вручную</strong> — используйте табличный черновик, чтобы вручную собрать афишу в редких случаях.</li>
-                <li><strong>Управление спектаклями</strong> — обновляйте названия спектаклей, чтобы парсер корректно подбирал соответствия.</li>
+                <li><strong>Парсинг афиши</strong> — загрузите расписание с сайта театра для последующей работы.</li>
+                <li><strong>Заполнение составов</strong> — назначьте артистов на роли для каждого спектакля в афише месяца.</li>
+                <li><strong>Управление спектаклями</strong> — редактируйте список спектаклей и их шаблоны.</li>
+                <li><strong>Создать вручную</strong> — используйте табличный черновик, чтобы вручную собрать афишу.</li>
             </ul>
         </div>
     </div>
