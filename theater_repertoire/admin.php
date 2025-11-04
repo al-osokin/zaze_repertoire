@@ -38,29 +38,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             deletePlay($id);
             $message = 'Спектакль удалён';
         }
-    } elseif (isset($_POST['save_template'])) {
-        $playId = $_POST['template_play_id'] ?? null;
-        $templateText = $_POST['template_text'] ?? '';
-
-        if ($playId && !empty($templateText)) {
-            saveTemplate($playId, $templateText);
-            $message = 'Шаблон сохранён';
-        } else {
-            $message = 'Выберите спектакль и введите текст шаблона';
-        }
     }
 }
 
 
-// Обработка редактирования шаблона
-$editTemplate = null;
-$templatePlay = null;
-if (isset($_GET['template'])) {
-    $templatePlay = getPlayByShortName($_GET['template']);
-    if ($templatePlay) {
-        $editTemplate = getTemplateByPlayId($templatePlay['id']);
-    }
-}
 
 $plays = getAllPlays();
 $editPlay = null;
@@ -113,7 +94,7 @@ if (isset($_GET['edit'])) {
                             <td class="actions">
                                 <a href="admin.php?edit=<?php echo urlencode($play['short_name']); ?>" class="btn-icon btn-secondary btn-edit" title="Редактировать спектакль"></a>
                                 <a href="roles_admin.php?play_id=<?php echo $play['id']; ?>" class="btn-icon btn-info btn-roles" title="Управление ролями"></a>
-                                <a href="admin.php?template=<?php echo urlencode($play['short_name']); ?>" class="btn-icon btn-primary btn-cast" title="Редактировать шаблон"></a>
+                                <a href="template_editor.php?play_id=<?php echo $play['id']; ?>" class="btn-icon btn-primary btn-cast" title="Редактировать шаблон"></a>
                                 <button type="button" class="btn-icon btn-success btn-copy" title="Копировать шаблон" onclick="copyTemplate('<?php echo htmlspecialchars($play['short_name']); ?>')"></button>
                                 <form method="post" style="display: inline;">
                                     <input type="hidden" name="play_id" value="<?php echo $play['id']; ?>">
@@ -187,25 +168,6 @@ if (isset($_GET['edit'])) {
             </form>
         </div>
 
-        <?php if ($templatePlay): ?>
-        <div class="section">
-            <h2>Редактирование шаблона: <?php echo htmlspecialchars($templatePlay['short_name']); ?> - <?php echo htmlspecialchars($templatePlay['full_name']); ?></h2>
-            <form method="post">
-                <input type="hidden" name="template_play_id" value="<?php echo htmlspecialchars($templatePlay['id']); ?>">
-
-                <div class="form-group">
-                    <label for="template_text">Текст шаблона (используйте {CODE} для кода мероприятия):</label>
-                    <textarea id="template_text" name="template_text" placeholder="==В ролях:==&#10;''СОСТАВ УТОЧНЯЕТСЯ''&#10;&#10;'''[https://www.zazerkal.spb.ru/tickets/{CODE}.htm|КУПИТЬ БИЛЕТ]'''"><?php echo htmlspecialchars($editTemplate['template_text'] ?? '==В ролях:==
-\'\'СОСТАВ УТОЧНЯЕТСЯ\'\'
-
-\'\'\'[https://www.zazerkal.spb.ru/tickets/{CODE}.htm|КУПИТЬ БИЛЕТ]\'\'\''); ?></textarea>
-                </div>
-
-                <button type="submit" name="save_template" class="btn-primary">Сохранить шаблон</button>
-                <a href="admin.php" class="btn-secondary" style="margin-left: 10px;">Отмена</a>
-            </form>
-        </div>
-        <?php endif; ?>
 
 
     </div>

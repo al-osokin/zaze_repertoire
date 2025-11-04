@@ -25,8 +25,8 @@ foreach ($playTemplates as $template) {
     }
     echo "Парсинг шаблона для play_id: " . $template['play_id'] . "\n";
     try {
-        $parsedRoles = $parser->parseTemplate($template['play_id'], $template['template_text']);
-        echo "  - Успешно распарсено " . count($parsedRoles) . " ролей.\n";
+        $parser->parseTemplate($template['play_id'], $template['template_text']);
+        echo "  - Шаблон успешно обработан.\n";
     } catch (Exception $e) {
         echo "  - Ошибка при парсинге play_id " . $template['play_id'] . ": " . $e->getMessage() . "\n";
     }

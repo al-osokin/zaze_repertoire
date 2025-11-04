@@ -21,7 +21,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if ($_POST['action'] === 'save_role') {
         $roleId = $_POST['role_id'] ?? null;
         $roleName = trim($_POST['role_name'] ?? '');
-        $roleDescription = trim($_POST['role_description'] ?? '');
         $expectedArtistType = $_POST['expected_artist_type'] ?? 'artist';
         $sortOrder = (int)($_POST['sort_order'] ?? 0);
 
@@ -31,13 +30,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             try {
                 if ($roleId) {
                     // Обновление роли
-                    $stmt = $pdo->prepare("UPDATE roles SET role_name = ?, role_description = ?, expected_artist_type = ?, sort_order = ?, updated_at = NOW() WHERE role_id = ? AND play_id = ?");
-                    $stmt->execute([$roleName, $roleDescription, $expectedArtistType, $sortOrder, $roleId, $playId]);
+                    $stmt = $pdo->prepare("UPDATE roles SET role_name = ?, expected_artist_type = ?, sort_order = ?, updated_at = NOW() WHERE role_id = ? AND play_id = ?");
+                    $stmt->execute([$roleName, $expectedArtistType, $sortOrder, $roleId, $playId]);
                     $message = "Роль обновлена.";
                 } else {
                     // Создание новой роли
-                    $stmt = $pdo->prepare("INSERT INTO roles (play_id, role_name, role_description, expected_artist_type, sort_order) VALUES (?, ?, ?, ?, ?)");
-                    $stmt->execute([$playId, $roleName, $roleDescription, $expectedArtistType, $sortOrder]);
+                    $stmt = $pdo->prepare("INSERT INTO roles (play_id, role_name, expected_artist_type, sort_order) VALUES (?, ?, ?, ?)");
+                    $stmt->execute([$playId, $roleName, $expectedArtistType, $sortOrder]);
                     $message = "Роль добавлена.";
                 }
                 header("Location: roles_admin.php?play_id=$playId&message=" . urlencode($message));
@@ -108,7 +107,6 @@ $artistTypes = ['artist', 'conductor', 'pianist', 'other'];
                 <thead>
                     <tr>
                         <th>Роль</th>
-                        <th>Описание</th>
                         <th>Тип артиста</th>
                         <th>Порядок</th>
                         <th>Действия</th>
@@ -118,7 +116,6 @@ $artistTypes = ['artist', 'conductor', 'pianist', 'other'];
                     <?php foreach ($roles as $role): ?>
                         <tr>
                             <td><?php echo htmlspecialchars($role['role_name']); ?></td>
-                            <td><?php echo htmlspecialchars($role['role_description'] ?? ''); ?></td>
                             <td><?php echo htmlspecialchars($role['expected_artist_type']); ?></td>
                             <td><?php echo htmlspecialchars($role['sort_order']); ?></td>
                             <td class="actions">
@@ -147,11 +144,6 @@ $artistTypes = ['artist', 'conductor', 'pianist', 'other'];
                 <div class="form-group">
                     <label for="role_name">Название роли:</label>
                     <input type="text" id="role_name" name="role_name" value="<?php echo htmlspecialchars($editRole['role_name'] ?? ''); ?>" required>
-                </div>
-
-                <div class="form-group">
-                    <label for="role_description">Описание роли (необязательно):</label>
-                    <input type="text" id="role_description" name="role_description" value="<?php echo htmlspecialchars($editRole['role_description'] ?? ''); ?>">
                 </div>
 
                 <div class="form-group">

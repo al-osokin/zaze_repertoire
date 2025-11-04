@@ -18,18 +18,24 @@ class PlayTemplateParser
      */
     public function parseTemplate(int $playId, string $templateText): array
     {
-        $rolesData = [];
+        $elementsData = [];
         $lines = preg_split("/\r\n|\r|\n/", $templateText);
-        $currentSortOrder = 0; // Для упорядочивания ролей
+        $currentSortOrder = 0;
+
+        // Удаляем все существующие элементы для данного play_id
+        $stmt = $this->pdo->prepare("DELETE FROM template_elements WHERE play_id = ?");
+        $stmt->execute([$playId]);
 
         foreach ($lines as $line) {
             $line = trim($line);
             if (empty($line)) {
+                $this->saveTemplateElement($playId, 'newline', '', $currentSortOrder++);
                 continue;
             }
 
-            // Игнорируем заголовки типа ==В ролях:==
+            // Обработка заголовков типа ==В ролях:==
             if (str_starts_with($line, '==') && !str_starts_with($line, '===')) {
+                $this->saveTemplateElement($playId, 'heading', trim(str_replace('==', '', $line)), $currentSortOrder++, 2); // Уровень 2
                 continue;
             }
 
@@ -38,35 +44,31 @@ class PlayTemplateParser
                 continue;
             }
 
-            // Игнорируем фото и ссылку на билеты
-            if (str_starts_with($line, '[[photo') || str_contains($line, '|КУПИТЬ БИЛЕТ]')) {
+            // Игнорируем ссылку на билеты
+            if (str_contains($line, '|КУПИТЬ БИЛЕТ]')) {
                 continue;
             }
 
-            // Регекс для заголовков разделов (например, ===Пастораль «Искренность пастушки»===)
+            // Обработка картинок [[photo:image.jpg]]
+            if (preg_match('/^\[\[photo:(.+?)\]\]$/u', $line, $matches)) {
+                $this->saveTemplateElement($playId, 'image', $matches[1], $currentSortOrder++);
+                continue;
+            }
+
+            // Обработка заголовков разделов (например, ===Пастораль «Искренность пастушки»===)
             if (preg_match('/^={3}(.+?)={3}/u', $line, $matches)) {
-                // Можно использовать для группировки ролей или для sort_order
-                // Пока просто пропускаем, но можно сохранять в какой-то мета-информации для role.sort_order
+                $this->saveTemplateElement($playId, 'heading', trim($matches[1]), $currentSortOrder++, 3); // Уровень 3
                 continue;
             }
 
             // Попытка разобрать строки с ролями и артистами
             if (!str_contains($line, '—')) {
-                if (preg_match('/^\'\'\'([^\'\'\']+)\'\'\'(?:,\s*([^—]+))?\s*$/u', $line, $matches)) {
-                    $roleName = trim(str_replace(["'''", "''"], '', $matches[1]));
-                    $roleDescription = isset($matches[2]) ? trim($matches[2]) : null;
-                    if ($roleDescription !== null && $roleDescription === '') {
-                        $roleDescription = null;
-                    }
+                if (preg_match('/^(\'\'\'[^\'\'\']+\'\'\')\s*$/u', $line, $matches)) {
+                    $roleName = trim($matches[1]); // Сохраняем полную вики-разметку
                     $expectedArtistType = $this->detectExpectedArtistType($roleName);
 
-                    $rolesData[] = [
-                        'role_name' => $roleName,
-                        'role_description' => $roleDescription,
-                        'expected_artist_type' => $expectedArtistType,
-                        'initial_artists' => [],
-                        'sort_order' => $currentSortOrder++
-                    ];
+                    $roleId = $this->findOrCreateRole($playId, $roleName, $expectedArtistType, $currentSortOrder);
+                    $this->saveTemplateElement($playId, 'role', $roleId, $currentSortOrder++);
                 }
                 continue;
             }
@@ -81,27 +83,17 @@ class PlayTemplateParser
                 continue;
             }
 
-            $cleanRolePart = preg_replace('/\s+/u', ' ', trim(str_replace(["'''", "''"], '', $rawRolePart)));
-            if ($cleanRolePart === '') {
+            $roleName = preg_replace('/\s+/u', ' ', trim($rawRolePart)); // Сохраняем полную вики-разметку
+            if ($roleName === '') {
                 continue;
-            }
-
-            $roleName = $cleanRolePart;
-            $roleDescription = null;
-
-            if (preg_match('/^(.+?),\s*(.+)$/u', $cleanRolePart, $roleMatches)) {
-                $roleName = trim($roleMatches[1]);
-                $roleDescription = trim($roleMatches[2]);
-            }
-            if ($roleDescription !== null && $roleDescription === '') {
-                $roleDescription = null;
             }
 
             $expectedArtistType = $this->detectExpectedArtistType($roleName);
 
-            $artistNames = array_map('trim', explode(',', $artistNamesStr));
-            $initialArtists = [];
+            $roleId = $this->findOrCreateRole($playId, $roleName, $expectedArtistType, $currentSortOrder);
+            $this->saveTemplateElement($playId, 'role', $roleId, $currentSortOrder++);
 
+            $artistNames = array_map('trim', explode(',', $artistNamesStr));
             foreach ($artistNames as $artistFullName) {
                 $artistFullName = trim(str_replace(["'''", "''"], '', $artistFullName));
                 if ($artistFullName === '') {
@@ -134,35 +126,59 @@ class PlayTemplateParser
 
                 $artistId = $this->findOrCreateArtist($firstName, $lastName, $expectedArtistType);
                 if ($artistId) {
-                    $initialArtists[] = $artistId;
+                    $this->saveRoleArtistHistory($roleId, $artistId);
                 }
             }
-
-            $rolesData[] = [
-                'role_name' => $roleName,
-                'role_description' => $roleDescription,
-                'expected_artist_type' => $expectedArtistType,
-                'initial_artists' => $initialArtists,
-                'sort_order' => $currentSortOrder++
-            ];
         }
-        
-        // Теперь сохраняем распарсенные роли в БД
-        $this->saveParsedRoles($playId, $rolesData);
+        return $elementsData; // Возвращаем пустой массив, так как элементы сохраняются напрямую
+    }
 
-        return $rolesData;
+    private function saveTemplateElement(int $playId, string $elementType, string $elementValue, int $sortOrder, ?int $headingLevel = null): void
+    {
+        $stmt = $this->pdo->prepare("INSERT INTO template_elements (play_id, element_type, element_value, sort_order, heading_level) VALUES (?, ?, ?, ?, ?)");
+        $stmt->execute([$playId, $elementType, $elementValue, $sortOrder, $headingLevel]);
+    }
+
+    private function findOrCreateRole(int $playId, string $roleName, string $expectedArtistType, int $sortOrder): int
+    {
+        $stmt = $this->pdo->prepare("SELECT role_id FROM roles WHERE play_id = ? AND role_name = ?");
+        $stmt->execute([$playId, $roleName]);
+        $roleId = $stmt->fetchColumn();
+
+        if ($roleId) {
+            $stmt = $this->pdo->prepare("UPDATE roles SET expected_artist_type = ?, sort_order = ?, updated_at = NOW() WHERE role_id = ?");
+            $stmt->execute([$expectedArtistType, $sortOrder, $roleId]);
+        } else {
+            $stmt = $this->pdo->prepare("INSERT INTO roles (play_id, role_name, expected_artist_type, sort_order) VALUES (?, ?, ?, ?)");
+            $stmt->execute([$playId, $roleName, $expectedArtistType, $sortOrder]);
+            $roleId = $this->pdo->lastInsertId();
+        }
+        return $roleId;
+    }
+
+    private function saveRoleArtistHistory(int $roleId, int $artistId): void
+    {
+        $stmt = $this->pdo->prepare("
+            INSERT INTO role_artist_history (role_id, artist_id, assignment_count, last_assigned_date)
+            VALUES (?, ?, 1, NOW())
+            ON DUPLICATE KEY UPDATE assignment_count = assignment_count + 1, last_assigned_date = NOW();
+        ");
+        $stmt->execute([$roleId, $artistId]);
     }
 
     private function detectExpectedArtistType(string $roleName): string
     {
-        if (mb_stripos($roleName, 'Дирижёр') !== false || mb_stripos($roleName, 'Дирижер') !== false) {
+        // Используем глобальную функцию normalizeRoleName
+        $normalizedRoleName = \normalizeRoleName($roleName);
+
+        if (mb_stripos($normalizedRoleName, 'Дирижёр') !== false || mb_stripos($normalizedRoleName, 'Дирижер') !== false) {
             return 'conductor';
         }
 
         if (
-            mb_stripos($roleName, 'Клавесин') !== false ||
-            mb_stripos($roleName, 'Концертмейстер') !== false ||
-            mb_stripos($roleName, 'Пианист') !== false
+            mb_stripos($normalizedRoleName, 'Клавесин') !== false ||
+            mb_stripos($normalizedRoleName, 'Концертмейстер') !== false ||
+            mb_stripos($normalizedRoleName, 'Пианист') !== false
         ) {
             return 'pianist';
         }
@@ -208,48 +224,4 @@ class PlayTemplateParser
         return $this->pdo->lastInsertId();
     }
 
-    /**
-     * Сохраняет распарсенные роли в таблицы roles и role_artist_history.
-     * @param int $playId
-     * @param array $rolesData
-     */
-    private function saveParsedRoles(int $playId, array $rolesData): void
-    {
-        foreach ($rolesData as $role) {
-            $roleName = $role['role_name'];
-            $roleDescription = $role['role_description'];
-            if ($roleDescription !== null) {
-                $roleDescription = trim($roleDescription);
-                if ($roleDescription === '') {
-                    $roleDescription = null;
-                }
-            }
-
-            // Ищем роль. Если есть - обновляем, иначе создаем
-            $stmt = $this->pdo->prepare("SELECT role_id FROM roles WHERE play_id = ? AND role_name = ? AND (role_description = ? OR (role_description IS NULL AND ? IS NULL))");
-            $stmt->execute([$playId, $roleName, $roleDescription, $roleDescription]);
-            $roleId = $stmt->fetchColumn();
-
-            if ($roleId) {
-                // Обновляем существующую роль
-                $stmt = $this->pdo->prepare("UPDATE roles SET expected_artist_type = ?, sort_order = ?, updated_at = NOW() WHERE role_id = ?");
-                $stmt->execute([$role['expected_artist_type'], $role['sort_order'], $roleId]);
-            } else {
-                // Создаем новую роль
-                $stmt = $this->pdo->prepare("INSERT INTO roles (play_id, role_name, role_description, expected_artist_type, sort_order) VALUES (?, ?, ?, ?, ?)");
-                $stmt->execute([$playId, $roleName, $roleDescription, $role['expected_artist_type'], $role['sort_order']]);
-                $roleId = $this->pdo->lastInsertId();
-            }
-
-            // Сохраняем начальных артистов в историю назначений
-            foreach ($role['initial_artists'] as $artistId) {
-                $stmt = $this->pdo->prepare("
-                    INSERT INTO role_artist_history (role_id, artist_id, assignment_count, last_assigned_date)
-                    VALUES (?, ?, 1, NOW())
-                    ON DUPLICATE KEY UPDATE assignment_count = assignment_count + 1, last_assigned_date = NOW();
-                ");
-                $stmt->execute([$roleId, $artistId]);
-            }
-        }
-    }
 }

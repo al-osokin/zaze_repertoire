@@ -81,24 +81,43 @@ function deletePlay($id) {
 }
 
 // Функции для шаблонов
-function getTemplateByPlayId($playId) {
+function getTemplateElementsForPlay(int $playId): array {
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("SELECT * FROM template_elements WHERE play_id = ? ORDER BY sort_order ASC");
+    $stmt->execute([$playId]);
+    return $stmt->fetchAll();
+}
+
+function saveTemplateElement(int $playId, string $elementType, string $elementValue, int $sortOrder): void {
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("INSERT INTO template_elements (play_id, element_type, element_value, sort_order) VALUES (?, ?, ?, ?)");
+    $stmt->execute([$playId, $elementType, $elementValue, $sortOrder]);
+}
+
+function deleteTemplateElementsByPlayId(int $playId): void {
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("DELETE FROM template_elements WHERE play_id = ?");
+    $stmt->execute([$playId]);
+}
+
+function getTemplateByPlayId(int $playId): ?array {
     $pdo = getDBConnection();
     $stmt = $pdo->prepare("SELECT * FROM play_templates WHERE play_id = ?");
     $stmt->execute([$playId]);
     return $stmt->fetch();
 }
 
-function saveTemplate($playId, $templateText) {
+function getRoleById(int $roleId): ?array {
     $pdo = getDBConnection();
-    $existing = getTemplateByPlayId($playId);
+    $stmt = $pdo->prepare("SELECT * FROM roles WHERE role_id = ?");
+    $stmt->execute([$roleId]);
+    return $stmt->fetch();
+}
 
-    if ($existing) {
-        $stmt = $pdo->prepare("UPDATE play_templates SET template_text = ? WHERE play_id = ?");
-        $stmt->execute([$templateText, $playId]);
-    } else {
-        $stmt = $pdo->prepare("INSERT INTO play_templates (play_id, template_text) VALUES (?, ?)");
-        $stmt->execute([$playId, $templateText]);
-    }
+function updatePlayTemplate(int $playId, string $templateText): void {
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("UPDATE play_templates SET template_text = ?, updated_at = NOW() WHERE play_id = ?");
+    $stmt->execute([$templateText, $playId]);
 }
 
 // Функции для истории
@@ -240,7 +259,6 @@ function buildPerformanceCard(int $performanceId, bool $includePhoto = true): ar
     $rolesStmt = $pdo->prepare("
         SELECT
             r.role_name,
-            r.role_description,
             pra.role_id,
             pra.artist_id,
             pra.custom_artist_name,
@@ -258,11 +276,11 @@ function buildPerformanceCard(int $performanceId, bool $includePhoto = true): ar
 
     $groupedCast = [];
     foreach ($castData as $cast) {
-        $roleKey = $cast['role_name'] . ($cast['role_description'] ?? '');
-        if (!isset($groupedCast[$roleKey])) {
-            $groupedCast[$roleKey] = [
-                'name' => $cast['role_name'],
-                'description' => $cast['role_description'],
+        // Нормализуем имя роли для ключа группировки
+        $normalizedRoleName = normalizeRoleName($cast['role_name']);
+        if (!isset($groupedCast[$normalizedRoleName])) {
+            $groupedCast[$normalizedRoleName] = [
+                'name' => $cast['role_name'], // Сохраняем оригинальное имя с разметкой
                 'artists' => [],
             ];
         }
@@ -272,82 +290,69 @@ function buildPerformanceCard(int $performanceId, bool $includePhoto = true): ar
         if (!empty($cast['artist_id'])) {
             $artistName = trim(($cast['first_name'] ?? '') . ' ' . ($cast['last_name'] ?? ''));
             if ($artistName !== '') {
-                $groupedCast[$roleKey]['artists'][] = $artistName . $firstTimeSuffix;
+                $groupedCast[$normalizedRoleName]['artists'][] = $artistName . $firstTimeSuffix;
             }
         } elseif (!empty($cast['custom_artist_name'])) {
             $customName = trim($cast['custom_artist_name']);
             if ($customName !== '' && mb_strtoupper($customName, 'UTF-8') !== 'СОСТАВ УТОЧНЯЕТСЯ') {
-                $groupedCast[$roleKey]['artists'][] = $customName . $firstTimeSuffix;
+                $groupedCast[$normalizedRoleName]['artists'][] = $customName . $firstTimeSuffix;
             }
         }
     }
 
-    $regularLines = [];
-    $specialLines = [];
-    foreach ($groupedCast as $role) {
-        if (empty($role['artists'])) {
-            continue;
-        }
+    $lines = [];
+    $elements = getTemplateElementsForPlay($result['play_id']);
 
-        $description = $role['description'] ? ', ' . $role['description'] : '';
-        $line = "'''" . $role['name'] . "'''" . $description . ' — ' . implode(', ', $role['artists']);
-
-        $normalizedName = mb_strtolower($role['name']);
-        $isSpecial = (
-            mb_stripos($normalizedName, 'дириж') !== false ||
-            mb_stripos($normalizedName, 'клавесин') !== false ||
-            mb_stripos($normalizedName, 'концертмейстер') !== false ||
-            mb_stripos($normalizedName, 'джазбо-браун') !== false
-        );
-
-        if ($isSpecial) {
-            $specialLines[] = $line;
-        } else {
-            $regularLines[] = $line;
+    foreach ($elements as $element) {
+        if ($element['element_type'] === 'heading') {
+            $level = $element['heading_level'] ?? 3; // По умолчанию 3, если не указан
+            $headingText = $element['element_value'];
+            $lines[] = str_repeat('=', $level) . $headingText . str_repeat('=', $level);
+        } elseif ($element['element_type'] === 'image') {
+            $lines[] = "[[photo:". $element['element_value'] ."]]";
+        } elseif ($element['element_type'] === 'newline') {
+            $lines[] = '';
+        } elseif ($element['element_type'] === 'role') {
+            $role = getRoleById($element['element_value']);
+            if ($role && isset($groupedCast[$role['role_name']])) {
+                $castEntry = $groupedCast[$role['role_name']];
+                if (!empty($castEntry['artists'])) {
+                    $lines[] = $castEntry['name'] . ' — ' . implode(', ', $castEntry['artists']);
+                } else {
+                    $lines[] = $castEntry['name'] . ' — ' . "''СОСТАВ УТОЧНЯЕТСЯ''";
+                }
+            } else if ($role) {
+                $lines[] = $role['role_name'] . ' — ' . "''СОСТАВ УТОЧНЯЕТСЯ''";
+            }
         }
     }
 
-    $hasArtists = !empty($regularLines) || !empty($specialLines);
+    $hasArtists = !empty($lines); // Если есть хоть какие-то элементы, считаем, что есть артисты/состав
     if (!$hasArtists) {
         return $result;
     }
 
-    $lines = ["==В ролях:=="];
-    foreach ($regularLines as $line) {
-        $lines[] = $line;
-    }
-
-    $photoAdded = false;
-    if ($includePhoto) {
-        $tplStmt = $pdo->prepare("SELECT template_text FROM play_templates WHERE play_id = ?");
-        $tplStmt->execute([$result['play_id']]);
-        $template = $tplStmt->fetchColumn();
-        if ($template && preg_match('/\\[\\[photo[^\\]]*\\]\\]/iu', $template, $photoMatch)) {
-            $lines[] = '';
-            $lines[] = trim($photoMatch[0]);
-            $lines[] = '';
-            $photoAdded = true;
-        }
-    }
-
-    if (!empty($specialLines)) {
-        if (!$photoAdded) {
-            $lines[] = '';
-        }
-        foreach ($specialLines as $line) {
-            $lines[] = $line;
-        }
-    }
-
     if (!empty($performance['ticket_code'])) {
         $lines[] = '';
-        $lines[] = "'''[http://www.zazerkал.spb.ru/tickets/" . $performance['ticket_code'] . ".htm|КУПИТЬ БИЛЕТ]'''";
+        $lines[] = "'''[http://www.zazerkal.spb.ru/tickets/" . $performance['ticket_code'] . ".htm|КУПИТЬ БИЛЕТ]'''";
     }
 
     $result['text'] = implode("\n", $lines);
     $result['has_artists'] = true;
 
     return $result;
+}
+
+/**
+ * Нормализует имя роли, удаляя вики-разметку и лишние пробелы.
+ * @param string $roleName
+ * @return string
+ */
+function normalizeRoleName(string $roleName): string
+{
+    // Удаляем тройные кавычки и лишние пробелы
+    $normalized = str_replace(["'''", "''"], '', $roleName);
+    return trim(preg_replace('/\s+/u', ' ', $normalized));
 }
 
 ?>
