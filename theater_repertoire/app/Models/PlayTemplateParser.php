@@ -49,9 +49,9 @@ class PlayTemplateParser
                 continue;
             }
 
-            // Обработка картинок [[photo:image.jpg]]
-            if (preg_match('/^\[\[photo:(.+?)\]\]$/u', $line, $matches)) {
-                $this->saveTemplateElement($playId, 'image', $matches[1], $currentSortOrder++);
+            // Обработка картинок [[photo-ID_PHOTO|SIZE|TEXT]]
+            if (str_starts_with($line, '[[photo-') && str_ends_with($line, ']]')) {
+                $this->saveTemplateElement($playId, 'image', $line, $currentSortOrder++);
                 continue;
             }
 

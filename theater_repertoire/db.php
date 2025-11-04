@@ -309,20 +309,23 @@ function buildPerformanceCard(int $performanceId, bool $includePhoto = true): ar
             $headingText = $element['element_value'];
             $lines[] = str_repeat('=', $level) . $headingText . str_repeat('=', $level);
         } elseif ($element['element_type'] === 'image') {
-            $lines[] = "[[photo:". $element['element_value'] ."]]";
+            $lines[] = $element['element_value'];
         } elseif ($element['element_type'] === 'newline') {
             $lines[] = '';
         } elseif ($element['element_type'] === 'role') {
             $role = getRoleById($element['element_value']);
-            if ($role && isset($groupedCast[$role['role_name']])) {
-                $castEntry = $groupedCast[$role['role_name']];
-                if (!empty($castEntry['artists'])) {
-                    $lines[] = $castEntry['name'] . ' — ' . implode(', ', $castEntry['artists']);
+            if ($role) {
+                $normalizedRoleNameFromTemplate = normalizeRoleName($role['role_name']);
+                if (isset($groupedCast[$normalizedRoleNameFromTemplate])) {
+                    $castEntry = $groupedCast[$normalizedRoleNameFromTemplate];
+                    if (!empty($castEntry['artists'])) {
+                        $lines[] = $castEntry['name'] . ' — ' . implode(', ', $castEntry['artists']);
+                    } else {
+                        $lines[] = $castEntry['name'] . ' — ' . "''СОСТАВ УТОЧНЯЕТСЯ''";
+                    }
                 } else {
-                    $lines[] = $castEntry['name'] . ' — ' . "''СОСТАВ УТОЧНЯЕТСЯ''";
+                    $lines[] = $role['role_name'] . ' — ' . "''СОСТАВ УТОЧНЯЕТСЯ''";
                 }
-            } else if ($role) {
-                $lines[] = $role['role_name'] . ' — ' . "''СОСТАВ УТОЧНЯЕТСЯ''";
             }
         }
     }
@@ -353,6 +356,37 @@ function normalizeRoleName(string $roleName): string
     // Удаляем тройные кавычки и лишние пробелы
     $normalized = str_replace(["'''", "''"], '', $roleName);
     return trim(preg_replace('/\s+/u', ' ', $normalized));
+}
+
+/**
+ * Вспомогательная функция для инициализации performance_roles_artists
+ * Заполняет таблицу performance_roles_artists ролями из play_id с пустым составом.
+ * @param \PDO $pdo
+ * @param int $performanceId
+ * @param int $playId
+ */
+function initializePerformanceRoles(\PDO $pdo, int $performanceId, int $playId): void {
+    $stmt = $pdo->prepare("SELECT role_id FROM roles WHERE play_id = ? ORDER BY sort_order");
+    $stmt->execute([$playId]);
+    $roles = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+    foreach ($roles as $roleId) {
+        $insertStmt = $pdo->prepare("
+            INSERT INTO performance_roles_artists (performance_id, role_id, artist_id, custom_artist_name, sort_order_in_role)
+            VALUES (?, ?, NULL, 'СОСТАВ УТОЧНЯЕТСЯ', 0)
+        ");
+        $insertStmt->execute([$performanceId, $roleId]);
+    }
+}
+
+/**
+ * Генерирует вики-карточку для VK на основе данных о представлении и его составе.
+ * @param int $performanceId ID представления.
+ * @return string Сгенерированная вики-разметка.
+ */
+function generateVkCard(int $performanceId): string {
+    $cardData = buildPerformanceCard($performanceId, true);
+    return $cardData['text'];
 }
 
 ?>

@@ -54,7 +54,9 @@ foreach ($assignedStmt->fetchAll() as $item) {
     $assignedArtists[$item['role_id']][] = $item;
 }
 
-// Если для этого представления еще нет назначенных ролей, инициализируем их
+// Если для этого представления еще нет назначенных ролей,
+// подготавливаем данные для формы на основе последнего сохраненного состава или шаблона,
+// но НЕ СОХРАНЯЕМ их в базу данных до нажатия кнопки "Сохранить состав".
 if (empty($assignedArtists)) {
     $playId = $performance['play_id'];
     $defaultsStmt = $pdo->prepare("
@@ -67,75 +69,21 @@ if (empty($assignedArtists)) {
     $defaultCast = $defaultsStmt->fetchAll();
 
     if (!empty($defaultCast)) {
-        $insertDefaultAssignmentStmt = $pdo->prepare("
-            INSERT INTO performance_roles_artists (performance_id, role_id, artist_id, custom_artist_name, sort_order_in_role, is_first_time)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ");
-        foreach ($defaultCast as $default) {
-            $defaultCustomName = trim($default['custom_artist_name'] ?? '');
-            if ($defaultCustomName !== '' && mb_strtoupper($defaultCustomName, 'UTF-8') === $customNamePlaceholderUpper) {
-                $defaultCustomName = '';
-            }
-            if (empty($default['artist_id']) && $defaultCustomName === '') {
-                continue;
-            }
-            $insertDefaultAssignmentStmt->execute([
-                $performanceId,
-                $default['role_id'],
-                $default['artist_id'],
-                $defaultCustomName ?: null,
-                $default['sort_order_in_role'],
-                $default['is_first_time']
-            ]);
+        // Используем последний сохраненный состав для этого спектакля
+        foreach ($defaultCast as $item) {
+            $assignedArtists[$item['role_id']][] = $item;
         }
     } else {
-        // --- НАЧАЛО ПЕРЕНЕСЕННОГО КОДА initializePerformanceRoles ---
-        $templateStmt = $pdo->prepare("SELECT template_text FROM play_templates WHERE play_id = ?");
-        $templateStmt->execute([$playId]);
-        $template = $templateStmt->fetchColumn();
-
-        if (!$template) {
-            $rolesStmt = $pdo->prepare("SELECT role_id FROM roles WHERE play_id = ? ORDER BY sort_order");
-            $rolesStmt->execute([$playId]);
-            $roles = $rolesStmt->fetchAll(PDO::FETCH_COLUMN);
-            $insertStmt = $pdo->prepare(
-                "INSERT INTO performance_roles_artists (performance_id, role_id, artist_id, custom_artist_name, sort_order_in_role) VALUES (?, ?, NULL, NULL, 0)"
-            );
-            foreach ($roles as $roleId) {
-                $insertStmt->execute([$performanceId, $roleId]);
-            }
-        } else {
-            $parser = new \App\Models\PlayTemplateParser($pdo);
-            $parsedRoles = $parser->parseTemplate($playId, $template);
-            
-            $findRoleStmt = $pdo->prepare("SELECT role_id FROM roles WHERE play_id = ? AND role_name = ?");
-            $findArtistStmt = $pdo->prepare("SELECT artist_id FROM artists WHERE first_name = ? AND last_name = ?");
-            $insertArtistStmt = $pdo->prepare("INSERT INTO artists (first_name, last_name, type) VALUES (?, ?, ?)");
-            $insertAssignmentStmt = $pdo->prepare(
-                "INSERT INTO performance_roles_artists (performance_id, role_id, artist_id, sort_order_in_role) VALUES (?, ?, ?, ?)"
-            );
-
-            foreach ($parsedRoles as $roleData) {
-                $findRoleStmt->execute([$playId, $roleData['role_name']]);
-                $roleId = $findRoleStmt->fetchColumn();
-                if (!$roleId) continue;
-
-                if (empty($roleData['initial_artists'])) {
-                    $insertAssignmentStmt->execute([$performanceId, $roleId, null, 0]);
-                } else {
-                    foreach ($roleData['initial_artists'] as $sortOrder => $artistId) {
-                        $insertAssignmentStmt->execute([$performanceId, $roleId, $artistId, $sortOrder]);
-                    }
-                }
-            }
+        // Если нет "последнего состава", используем пустые роли из шаблона
+        foreach ($roles as $role) {
+            $assignedArtists[$role['role_id']][] = [
+                'role_id' => $role['role_id'],
+                'artist_id' => null,
+                'custom_artist_name' => '',
+                'sort_order_in_role' => 0,
+                'is_first_time' => 0
+            ];
         }
-        // --- КОНЕЦ ПЕРЕНЕСЕННОГО КОДА ---
-    }
-
-    // Перезагружаем назначенных артистов после инициализации
-    $assignedStmt->execute([$performanceId]);
-    foreach ($assignedStmt->fetchAll() as $item) {
-        $assignedArtists[$item['role_id']][] = $item;
     }
 }
 
@@ -285,18 +233,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             $pdo->commit();
             $message = "Состав успешно сохранен!";
-            // Перезагружаем данные после сохранения
-            header("Location: edit_cast.php?performance_id=$performanceId&message=" . urlencode($message));
+            // Перезагружаем данные после сохранения и добавляем якорь для прокрутки
+            header("Location: edit_cast.php?performance_id=$performanceId&message=" . urlencode($message) . "&saved=1");
             exit;
 
         } catch (Exception $e) {
             $pdo->rollBack();
             $message = "Ошибка сохранения: " . $e->getMessage();
         }
+    } elseif (isset($_POST['action']) && $_POST['action'] === 'generate_card') {
+        // Реализация генерации карточки
+        $generatedWikiCard = generateVkCard($performanceId);
+        updateVkPostText($performanceId, $generatedWikiCard);
+        $message = "Карточка сгенерирована и сохранена.";
+        header("Location: edit_cast.php?performance_id=$performanceId&message=" . urlencode($message) . "&show_card=1");
+        exit;
     }
 }
 
-// Генерация Wiki-карточки
+// Генерация Wiki-карточки (для отображения при загрузке страницы, если есть show_card)
 $cardRequest = ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'generate_card');
 $generatedWikiCard = '';
 if ($cardRequest || isset($_GET['show_card'])) {
@@ -306,8 +261,9 @@ if ($cardRequest || isset($_GET['show_card'])) {
         $message = "Состав не заполнен, карточку генерировать не из чего.";
     } else {
         $generatedWikiCard = $cardData['text'];
-        updateVkPostText($performanceId, $generatedWikiCard);
+        // updateVkPostText($performanceId, $generatedWikiCard); // Уже сделано выше при POST-запросе
 
+        // Логика сохранения состава по умолчанию (play_role_last_cast)
         try {
             $pdo->beginTransaction();
 
@@ -351,7 +307,7 @@ if ($cardRequest || isset($_GET['show_card'])) {
             error_log("Не удалось сохранить состав по умолчанию для спектакля {$performance['play_id']}: " . $e->getMessage());
         }
 
-        $message = "Карточка сгенерирована и сохранена.";
+        // $message = "Карточка сгенерирована и сохранена."; // Уже установлено выше
     }
 }
 
@@ -458,7 +414,10 @@ if ($cardRequest || isset($_GET['show_card'])) {
         <?php if ($generatedWikiCard): ?>
         <div style="margin-top: 20px;">
             <textarea id="wiki_card_output" readonly rows="10" style="width: 100%; font-family: monospace;"><?php echo htmlspecialchars($generatedWikiCard); ?></textarea>
-            <button type="button" class="btn-secondary" onclick="copyToClipboard('wiki_card_output')">Скопировать</button>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px;">
+                <button type="button" class="btn-secondary" onclick="copyToClipboard('wiki_card_output')">Скопировать</button>
+                <a href="schedule.php" class="btn-secondary">Назад к афише</a>
+            </div>
         </div>
         <?php endif; ?>
     </div>
@@ -589,7 +548,7 @@ function showToast(message, type = 'success') {
     }, 3000);
 }
 
-<?php if ($cardRequest || isset($_GET['show_card'])): ?>
+<?php if ($cardRequest || isset($_GET['show_card']) || isset($_GET['saved'])): ?>
 window.addEventListener('load', () => {
     const section = document.getElementById('card-section');
     if (section) {
