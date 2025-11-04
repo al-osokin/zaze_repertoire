@@ -1,3 +1,0 @@
-# Local database dumps (managed outside source control)
-/avo_zaze*.sql
-**/avo_zaze*.sql

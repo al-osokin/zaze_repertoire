@@ -31,6 +31,7 @@ files/
 # Бэкапы баз данных
 *.sql.bak
 *.dump
+*dump.sql
 
 # Node.js (если используется)
 node_modules/
