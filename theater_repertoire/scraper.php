@@ -3,6 +3,9 @@ require_once 'config.php';
 require_once 'db.php';
 require_once 'web_parser.php';
 require_once 'wiki_generator.php';
+require_once 'vk_config.php';
+require_once 'app/ApiClient/VKApiClient.php';
+require_once 'app/Services/VkRepertoirePublisher.php';
 
 requireAuth();
 
@@ -32,6 +35,7 @@ $wikiOutput = '';
 $sourceOutput = '';
 $unmatchedEvents = [];
 $generatedMonthYear = '';
+$vkPublishResult = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
@@ -137,6 +141,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $unmatchedEvents = $result['unmatched'];
             $generatedMonthYear = $result['month_key'];
             $message = sprintf('Афиша за %s сформирована.', $result['month_title']);
+        } catch (Throwable $e) {
+            $errors[] = $e->getMessage();
+        }
+    } elseif ($action === 'publish_vk') {
+        $selectedMonth = (int)($_POST['selected_month'] ?? $selectedMonth);
+        $selectedYear = (int)($_POST['selected_year'] ?? $selectedYear);
+
+        try {
+            if ($selectedYear < 2000 || $selectedYear > 2100) {
+                throw new InvalidArgumentException('Укажите корректный год.');
+            }
+
+            if ($selectedMonth < 1 || $selectedMonth > 12) {
+                throw new InvalidArgumentException('Укажите корректный месяц.');
+            }
+
+            $events = getRawEventsByMonthYear($selectedMonth, $selectedYear);
+            if (empty($events)) {
+                throw new RuntimeException('Для выбранного периода события не найдены. Сначала загрузите афишу и сохраните сопоставление.');
+            }
+
+            $accessToken = getSystemSetting('vk_access_token');
+            if (!$accessToken) {
+                throw new RuntimeException('VK access token не найден. Авторизуйтесь в настройках интеграции.');
+            }
+
+            $generator = new WikiGenerator();
+            $result = $generator->generate($selectedMonth, $selectedYear, $events);
+            $wikiOutput = $result['wiki'];
+            $sourceOutput = $result['source'];
+            $unmatchedEvents = $result['unmatched'];
+            $generatedMonthYear = $result['month_key'];
+
+            if (trim($wikiOutput) === '') {
+                throw new RuntimeException('Вики-разметка пуста. Проверьте введённые данные.');
+            }
+
+            $vkClient = new VKApiClient($accessToken, VK_API_VERSION);
+            $publisher = new VkRepertoirePublisher($vkClient, (int)VK_API_GROUP_ID);
+            $vkPublishResult = $publisher->publishMonthlyRepertoire($selectedMonth, $selectedYear, $wikiOutput, $events);
+
+            $pageId = $vkPublishResult['page_id'] ?? null;
+            $monthTitle = $result['month_title'];
+            $message = sprintf(
+                'Афиша за %s опубликована в VK%s.',
+                $monthTitle,
+                $pageId ? " (страница #{$pageId})" : ''
+            );
         } catch (Throwable $e) {
             $errors[] = $e->getMessage();
         }
@@ -377,6 +429,44 @@ function playSiteTitle(array $play): string
                         </div>
                         <textarea id="source_output_area" readonly rows="8" style="min-height: 160px; margin-top: 12px; display: none;"><?php echo htmlspecialchars($sourceOutput, ENT_NOQUOTES); ?></textarea>
                         <button type="button" class="btn-secondary" onclick="copySourceText()">Скопировать исходник</button>
+                    </div>
+                <?php endif; ?>
+
+                <?php if ($wikiOutput !== ''): ?>
+                    <form method="post" style="margin-top: 20px;">
+                        <input type="hidden" name="action" value="publish_vk">
+                        <input type="hidden" name="selected_month" value="<?php echo htmlspecialchars($selectedMonth); ?>">
+                        <input type="hidden" name="selected_year" value="<?php echo htmlspecialchars($selectedYear); ?>">
+                        <button type="submit" class="btn-primary">Опубликовать афишу в VK</button>
+                    </form>
+                <?php endif; ?>
+
+                <?php if (!empty($vkPublishResult)): ?>
+                    <div class="message success" style="margin-top: 20px;">
+                        <p>
+                            Афиша опубликована. Страница ID:
+                            <?php echo htmlspecialchars((string)($vkPublishResult['page_id'] ?? '—')); ?>.
+                        </p>
+                        <?php if (!empty($vkPublishResult['archive'])): ?>
+                            <p>Архив: <?php echo $vkPublishResult['archive']['updated'] ? 'обновлён' : 'без изменений'; ?>.</p>
+                        <?php endif; ?>
+                        <?php if (!empty($vkPublishResult['placeholders'])): ?>
+                            <p>
+                                Плейсхолдеры спектаклей —
+                                создано: <?php echo (int)($vkPublishResult['placeholders']['created'] ?? 0); ?>,
+                                пропущено: <?php echo (int)($vkPublishResult['placeholders']['skipped'] ?? 0); ?>.
+                            </p>
+                            <?php if (!empty($vkPublishResult['placeholders']['errors'])): ?>
+                                <details style="margin-top: 10px;">
+                                    <summary>Ошибки при создании плейсхолдеров</summary>
+                                    <ul>
+                                        <?php foreach ($vkPublishResult['placeholders']['errors'] as $errorMessage): ?>
+                                            <li><?php echo htmlspecialchars($errorMessage); ?></li>
+                                        <?php endforeach; ?>
+                                    </ul>
+                                </details>
+                            <?php endif; ?>
+                        <?php endif; ?>
                     </div>
                 <?php endif; ?>
             <?php endif; ?>

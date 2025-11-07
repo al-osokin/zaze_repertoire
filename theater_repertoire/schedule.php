@@ -96,6 +96,11 @@ $performances = $stmt->fetchAll();
                                      title="Копировать карточку"
                                      onclick="copyPerformanceCard(<?php echo (int)$performance['performance_id']; ?>, <?php echo htmlspecialchars(json_encode($performance['play_name']), ENT_QUOTES, 'UTF-8'); ?>)">
                              </button>
+                             <button type="button"
+                                     class="btn-icon btn-info btn-publish"
+                                     title="Опубликовать в VK"
+                                     onclick="publishToVK(<?php echo (int)$performance['performance_id']; ?>, <?php echo htmlspecialchars(json_encode($performance['play_name']), ENT_QUOTES, 'UTF-8'); ?>)">
+                             </button>
                         </td>
                     </tr>
                     <?php endforeach; ?>
@@ -151,6 +156,34 @@ $performances = $stmt->fetchAll();
             } catch (error) {
                 console.error(error);
                 showToast(`Ошибка копирования: ${error.message}`, 'error');
+            }
+        }
+
+        async function publishToVK(performanceId, playName = '') {
+            try {
+                const response = await fetch('publish_to_vk.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ performance_id: performanceId }),
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast(`Карточка для "${playName}" опубликована!`, 'success');
+                } else {
+                    showToast(data.message || 'Ошибка публикации', 'error');
+                }
+            } catch (error) {
+                console.error(error);
+                showToast(`Ошибка публикации: ${error.message}`, 'error');
             }
         }
 
