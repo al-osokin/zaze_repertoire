@@ -28,6 +28,7 @@ session_*
 # Загруженные файлы
 uploads/
 files/
+storage/
 
 # Бэкапы баз данных
 *.sql.bak

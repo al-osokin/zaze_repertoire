@@ -174,7 +174,14 @@ class WikiGenerator
                 $row .= " \n<br/>'''$ticketLink'''";
             }
         } else {
-            $link = $this->formatRolesLink($event, $play, $hasMultiple);
+            $pageName = $this->generatePageName($event, $play, $hasMultiple);
+            if ($pageName) {
+                updateVkPageName((int)$event['id'], $pageName);
+                $link = sprintf('[[%s|в ролях]]', $pageName);
+            } else {
+                $link = '';
+            }
+
             $row .= "| '''$fullPlayName'''";
             if ($link !== '') {
                 $row .= " \n<br/>$link";
@@ -210,32 +217,41 @@ class WikiGenerator
         return sprintf('[http://www.zazerkal.spb.ru/tickets/%s.htm|купить билет]', $trimmedCode);
     }
 
-    private function formatRolesLink(array $event, array $play, bool $hasMultiple): string
+    private function generatePageName(array $event, array $play, bool $hasMultiple): ?string
     {
         $wikiLink = trim((string)($play['wiki_link'] ?? ''));
         if ($wikiLink === '') {
-            return '';
+            return null;
         }
 
         $date = $event['event_date'] ?? '';
         if ($date === '') {
-            return '';
+            return null;
         }
 
         try {
             $dateObj = new \DateTimeImmutable($date);
         } catch (\Throwable $e) {
-            return '';
+            return null;
         }
 
         $dateForLink = $dateObj->format('d.m.y');
-        $link = $wikiLink . '_' . $dateForLink;
+        $pageName = $wikiLink . '_' . $dateForLink;
 
         if ($hasMultiple) {
-            $link .= '_' . $this->formatTimeForLink($event['event_time'] ?? '');
+            $pageName .= '_' . $this->formatTimeForLink($event['event_time'] ?? '');
         }
 
-        return sprintf('[[%s|в ролях]]', $link);
+        return $pageName;
+    }
+
+    private function formatRolesLink(array $event, array $play, bool $hasMultiple): string
+    {
+        $pageName = $this->generatePageName($event, $play, $hasMultiple);
+        if ($pageName) {
+            return sprintf('[[%s|в ролях]]', $pageName);
+        }
+        return '';
     }
 
     private function formatDateForWiki(string $date, string $time): string
@@ -373,4 +389,3 @@ class WikiGenerator
         return sprintf('%s %d', $monthTitle, $year);
     }
 }
-

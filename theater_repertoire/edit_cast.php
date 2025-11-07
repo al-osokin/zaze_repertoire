@@ -414,8 +414,15 @@ if ($cardRequest || isset($_GET['show_card'])) {
         <?php if ($generatedWikiCard): ?>
         <div style="margin-top: 20px;">
             <textarea id="wiki_card_output" readonly rows="10" style="width: 100%; font-family: monospace;"><?php echo htmlspecialchars($generatedWikiCard); ?></textarea>
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px;">
-                <button type="button" class="btn-secondary" onclick="copyToClipboard('wiki_card_output')">Скопировать</button>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; flex-wrap: wrap; gap: 10px;">
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <button type="button" class="btn-secondary" onclick="copyToClipboard('wiki_card_output')">Скопировать</button>
+                    <button type="button"
+                            class="btn-info"
+                            onclick="publishCardToVK(<?php echo (int)$performanceId; ?>, <?php echo htmlspecialchars(json_encode($performance['play_name'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>)">
+                        Опубликовать в VK
+                    </button>
+                </div>
                 <a href="schedule.php" class="btn-secondary">Назад к афише</a>
             </div>
         </div>
@@ -527,6 +534,38 @@ function copyToClipboard(elementId) {
         console.error(err);
         showToast(`Ошибка: ${err.message || err}`, 'error');
     });
+}
+
+async function publishCardToVK(performanceId, playName = '') {
+    if (!performanceId) {
+        showToast('Не указан performance_id', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch('publish_to_vk.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ performance_id: performanceId })
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (data.success) {
+            const name = playName || data.play_name || 'спектакль';
+            showToast(`Карточка для "${name}" опубликована!`, 'success');
+        } else {
+            showToast(data.message || 'Ошибка публикации', 'error');
+        }
+    } catch (error) {
+        console.error(error);
+        showToast(`Ошибка публикации: ${error.message}`, 'error');
+    }
 }
 
 function showToast(message, type = 'success') {

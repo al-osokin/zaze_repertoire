@@ -161,6 +161,41 @@ function getCurrentUser() {
     return $_SESSION['username'] ?? null;
 }
 
+function getVkPageNameByPerformanceId(int $performanceId): ?string
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("SELECT vk_page_name FROM events_raw WHERE id = ?");
+    $stmt->execute([$performanceId]);
+    $result = $stmt->fetchColumn();
+    return $result ?: null;
+}
+
+function getPerformanceDetailsById(int $performanceId): ?array
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("
+        SELECT
+            er.id AS performance_id,
+            er.event_date,
+            er.event_time,
+            er.play_id,
+            p.wiki_link,
+            (SELECT COUNT(*)
+             FROM events_raw er2
+             WHERE er2.play_id = er.play_id AND er2.event_date = er.event_date
+            ) AS occurrences_on_day
+        FROM
+            events_raw er
+        JOIN
+            plays p ON er.play_id = p.id
+        WHERE
+            er.id = ?
+    ");
+    $stmt->execute([$performanceId]);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $result ?: null;
+}
+
 // === Работа с распаршенными событиями афиши ===
 
 function generateUuidV4() {
@@ -228,6 +263,13 @@ function updateEventPlayMapping($eventId, $playId = null) {
 
     $stmt = $pdo->prepare("UPDATE events_raw SET play_id = ?, play_short_name = ? WHERE id = ?");
     $stmt->execute([$playId, $playShortName, $eventId]);
+}
+
+function updateVkPageName(int $eventId, string $pageName): void
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("UPDATE events_raw SET vk_page_name = ? WHERE id = ?");
+    $stmt->execute([$pageName, $eventId]);
 }
 
 function updateVkPostText($eventId, $text) {
@@ -387,6 +429,32 @@ function initializePerformanceRoles(\PDO $pdo, int $performanceId, int $playId):
 function generateVkCard(int $performanceId): string {
     $cardData = buildPerformanceCard($performanceId, true);
     return $cardData['text'];
+}
+
+// === System Settings ===
+
+function getSystemSetting(string $key): ?string {
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key = ?");
+    $stmt->execute([$key]);
+    $result = $stmt->fetchColumn();
+    return $result !== false ? $result : null;
+}
+
+function saveSystemSetting(string $key, string $value): void {
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("
+        INSERT INTO system_settings (setting_key, setting_value)
+        VALUES (?, ?)
+        ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)
+    ");
+    $stmt->execute([$key, $value]);
+}
+
+function deleteSystemSetting(string $key): void {
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("DELETE FROM system_settings WHERE setting_key = ?");
+    $stmt->execute([$key]);
 }
 
 ?>
