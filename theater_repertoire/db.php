@@ -415,7 +415,7 @@ function initializePerformanceRoles(\PDO $pdo, int $performanceId, int $playId):
     foreach ($roles as $roleId) {
         $insertStmt = $pdo->prepare("
             INSERT INTO performance_roles_artists (performance_id, role_id, artist_id, custom_artist_name, sort_order_in_role)
-            VALUES (?, ?, NULL, 'СОСТАВ УТОЧНЯЕТСЯ', 0)
+            VALUES (?, ?, NULL, '-- СОСТАВ УТОЧНЯЕТСЯ --', 0)
         ");
         $insertStmt->execute([$performanceId, $roleId]);
     }
