@@ -2,6 +2,8 @@
 require_once 'config.php';
 require_once 'db.php';
 requireAuth();
+require_once 'includes/navigation.php';
+handleLogoutRequest();
 
 $pdo = getDBConnection();
 $playId = $_GET['play_id'] ?? null;
@@ -15,6 +17,7 @@ $play = getPlayById($playId);
 if (!$play) {
     die("Спектакль не найден.");
 }
+$playDisplayTitle = formatPlayTitle($play['site_title'] ?? null, $play['full_name'] ?? null);
 
 // Обработка POST-запросов
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
@@ -82,17 +85,19 @@ $artistTypes = ['artist', 'conductor', 'pianist', 'other'];
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Управление ролями для <?php echo htmlspecialchars($play['full_name']); ?></title>
+    <title>Управление ролями для <?php echo htmlspecialchars($playDisplayTitle); ?></title>
     <link rel="stylesheet" href="css/main.css">
-    <link href="https://cdn.tailwindcss.com" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="app/globals.css">
 </head>
 <body>
     <div class="container">
+        <?php renderMainNavigation('plays'); ?>
         <div class="header">
-            <h1>Управление ролями</h1>
-            <h2>Спектакль: <?php echo htmlspecialchars($play['full_name']); ?></h2>
-            <a href="admin.php" class="btn-secondary">Назад к спектаклям</a>
+            <div>
+                <h1>Управление ролями</h1>
+                <p class="header-subtitle">Спектакль: <?php echo htmlspecialchars($playDisplayTitle); ?></p>
+            </div>
         </div>
 
         <?php if (!empty($_GET['message'])): ?>

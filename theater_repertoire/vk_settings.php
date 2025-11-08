@@ -3,6 +3,8 @@ require_once 'config.php';
 require_once 'db.php';
 require_once 'vk_config.php';
 requireAuth();
+require_once 'includes/navigation.php';
+handleLogoutRequest();
 
 $accessToken = getSystemSetting('vk_access_token');
 
@@ -82,7 +84,13 @@ if ($useVkIdFlow) {
 </head>
 <body>
     <div class="container">
-        <h1>Настройки интеграции с ВКонтакте</h1>
+        <?php renderMainNavigation('settings'); ?>
+        <div class="header">
+            <div>
+                <h1>Настройки интеграции с ВКонтакте</h1>
+                <p class="header-subtitle">Управление токеном и правами доступа</p>
+            </div>
+        </div>
 
         <?php if ($flashError): ?>
             <div class="alert alert-error">
@@ -127,7 +135,7 @@ if ($useVkIdFlow) {
         </div>
 
         <div class="section">
-            <a href="index.php">Вернуться на главную</a>
+            <p>Если нужно обновить авторизацию позже, вернитесь на эту страницу из меню (значок шестерёнки).</p>
         </div>
     </div>
 </body>

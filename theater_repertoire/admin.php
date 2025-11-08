@@ -2,6 +2,8 @@
 require_once 'config.php';
 require_once 'db.php';
 requireAuth();
+require_once 'includes/navigation.php';
+handleLogoutRequest();
 
 $message = '';
 
@@ -57,16 +59,16 @@ if (isset($_GET['edit'])) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Управление спектаклями - Репертуар театра</title>
     <link rel="stylesheet" href="css/main.css">
-    <link href="https://cdn.tailwindcss.com" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="app/globals.css">
 </head>
 <body>
     <div class="container">
+        <?php renderMainNavigation('plays'); ?>
         <div class="header">
-            <h1>Управление спектаклями</h1>
             <div>
-                <a href="index.php" class="btn-secondary" style="padding: 10px 20px; text-decoration: none;">Главная</a>
-                <a href="scraper.php" class="btn-secondary" style="padding: 10px 20px; text-decoration: none; margin-left: 10px;">Парсинг афиши</a>
+                <h1>Управление спектаклями</h1>
+                <p class="header-subtitle">Справочник спектаклей, ролей и шаблонов</p>
             </div>
         </div>
 
@@ -79,8 +81,7 @@ if (isset($_GET['edit'])) {
             <table>
                 <thead>
                     <tr>
-                        <th>Название на сайте</th>
-                        <th>Полное название</th>
+                        <th>Спектакль</th>
                         <th>Зал</th>
                         <th>Действия</th>
                     </tr>
@@ -88,8 +89,7 @@ if (isset($_GET['edit'])) {
                 <tbody>
                     <?php foreach ($plays as $play): ?>
                         <tr>
-                            <td><?php echo htmlspecialchars($play['site_title'] ?? ''); ?></td>
-                            <td><?php echo htmlspecialchars($play['full_name']); ?></td>
+                            <td><?php echo htmlspecialchars(formatPlayTitle($play['site_title'] ?? null, $play['full_name'] ?? null)); ?></td>
                             <td><?php echo htmlspecialchars($play['hall']); ?></td>
                             <td class="actions">
                                 <a href="admin.php?edit=<?php echo urlencode($play['short_name']); ?>" class="btn-icon btn-secondary btn-edit" title="Редактировать спектакль"></a>

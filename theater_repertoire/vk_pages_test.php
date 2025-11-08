@@ -4,6 +4,8 @@ requireAuth();
 require_once 'db.php';
 require_once 'vk_config.php';
 require_once 'app/ApiClient/VKApiClient.php';
+require_once 'includes/navigation.php';
+handleLogoutRequest();
 
 $accessToken = getSystemSetting('vk_access_token');
 $pages = [];
@@ -58,8 +60,13 @@ if (!$accessToken) {
 </head>
 <body>
     <div class="container">
-        <h1>Тест VK API: pages.getTitles</h1>
-        <p class="meta">Группа: <?php echo htmlspecialchars(VK_API_GROUP_ID, ENT_QUOTES, 'UTF-8'); ?></p>
+        <?php renderMainNavigation('settings'); ?>
+        <div class="header">
+            <div>
+                <h1>Тест VK API: pages.getTitles</h1>
+                <p class="header-subtitle">Группа <?php echo htmlspecialchars(VK_API_GROUP_ID, ENT_QUOTES, 'UTF-8'); ?></p>
+            </div>
+        </div>
         <div class="actions">
             <a href="vk_settings.php" class="btn-primary">Настройки VK</a>
             <a href="vk_pages_test.php" class="btn-primary" style="margin-left:8px;">Обновить список</a>

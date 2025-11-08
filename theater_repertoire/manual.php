@@ -1,6 +1,8 @@
 <?php
 require_once 'config.php';
 requireAuth();
+require_once 'includes/navigation.php';
+handleLogoutRequest();
 
 require_once 'parser.php';
 
@@ -9,9 +11,7 @@ $result = '';
 $sourceText = $_POST['source_text'] ?? '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (isset($_POST['logout'])) {
-        logout();
-    } elseif (isset($_POST['parse'])) {
+    if (isset($_POST['parse'])) {
         if (trim($sourceText) === '') {
             $message = 'Введите текст черновика.';
         } else {
@@ -29,20 +29,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Создать афишу вручную</title>
     <link rel="stylesheet" href="css/main.css">
-    <link href="https://cdn.tailwindcss.com" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="app/globals.css">
 </head>
 <body>
     <div class="container">
+        <?php renderMainNavigation(); ?>
         <div class="header">
-            <h1>Создать афишу вручную</h1>
             <div>
-                <a href="index.php" class="btn-secondary" style="margin-right: 10px; text-decoration: none; padding: 10px 18px;">Главная</a>
-                <a href="scraper.php" class="btn-secondary" style="margin-right: 10px; text-decoration: none; padding: 10px 18px;">Парсинг афиши</a>
-                <a href="admin.php" class="btn-secondary" style="margin-right: 10px; text-decoration: none; padding: 10px 18px;">Спектакли</a>
-                <form method="post" style="display: inline;">
-                    <button type="submit" name="logout" class="btn-secondary">Выход</button>
-                </form>
+                <h1>Создать афишу вручную</h1>
+                <p class="header-subtitle">Черновик для разовых публикаций</p>
             </div>
         </div>
 

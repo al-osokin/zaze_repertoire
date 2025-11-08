@@ -4,6 +4,8 @@ require_once 'db.php';
 require_once 'app/Models/PlayTemplateParser.php'; // Подключаем парсер для возможного использования
 
 requireAuth();
+require_once 'includes/navigation.php';
+handleLogoutRequest();
 
 function normalizePlaceholderSignature(string $text): string {
     if ($text === '') {
@@ -34,7 +36,8 @@ if (!$performanceId) {
 $stmt = $pdo->prepare("
     SELECT
         er.id AS performance_id, er.event_date, er.event_time, er.play_id,
-        p.full_name AS play_name
+        p.site_title AS play_site_title,
+        p.full_name AS play_full_name
     FROM events_raw er
     JOIN plays p ON er.play_id = p.id
     WHERE er.id = ?
@@ -45,6 +48,7 @@ $performance = $stmt->fetch();
 if (!$performance) {
     die("Представление не найдено.");
 }
+$playTitle = formatPlayTitle($performance['play_site_title'] ?? null, $performance['play_full_name'] ?? null);
 
 // 2. Получаем все роли для данного спектакля
 $rolesStmt = $pdo->prepare("SELECT * FROM roles WHERE play_id = ? ORDER BY sort_order");
@@ -353,15 +357,20 @@ if ($cardRequest || isset($_GET['show_card'])) {
     <meta charset="UTF-8">
     <title>Редактирование состава</title>
     <link rel="stylesheet" href="css/main.css">
-    <link href="https://cdn.tailwindcss.com" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="app/globals.css">
 </head>
 <body>
 <div class="container">
+    <?php renderMainNavigation('schedule'); ?>
     <div class="header">
-        <h1>Редактировать состав</h1>
-        <h2><?php echo htmlspecialchars($performance['play_name']); ?> (<?php echo date('d.m.Y H:i', strtotime($performance['event_date'] . ' ' . $performance['event_time'])); ?>)</h2>
-        <a href="schedule.php" class="btn-secondary">Назад к афише</a>
+        <div>
+            <h1>Редактировать состав</h1>
+            <p class="header-subtitle">
+                <?php echo htmlspecialchars($playTitle); ?>
+                — <?php echo date('d.m.Y H:i', strtotime($performance['event_date'] . ' ' . $performance['event_time'])); ?>
+            </p>
+        </div>
     </div>
 
     <?php if (!empty($_GET['message'])): ?>
@@ -454,7 +463,7 @@ if ($cardRequest || isset($_GET['show_card'])) {
                     <button type="button" class="btn-secondary" onclick="copyToClipboard('wiki_card_output')">Скопировать</button>
                     <button type="button"
                             class="btn-info"
-                            onclick="publishCardToVK(<?php echo (int)$performanceId; ?>, <?php echo htmlspecialchars(json_encode($performance['play_name'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>)">
+                            onclick="publishCardToVK(<?php echo (int)$performanceId; ?>, <?php echo htmlspecialchars(json_encode($playTitle ?? ''), ENT_QUOTES, 'UTF-8'); ?>)">
                         Опубликовать в VK
                     </button>
                 </div>

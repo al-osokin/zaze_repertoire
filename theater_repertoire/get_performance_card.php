@@ -7,7 +7,7 @@ function generatePerformanceCardData(int $performanceId): array
     $pdo = getDBConnection();
 
     $stmt = $pdo->prepare("
-        SELECT er.event_date, er.event_time, p.full_name
+        SELECT er.event_date, er.event_time, p.site_title, p.full_name
         FROM events_raw er
         LEFT JOIN plays p ON er.play_id = p.id
         WHERE er.id = ?
@@ -22,17 +22,18 @@ function generatePerformanceCardData(int $performanceId): array
     $card = buildPerformanceCard($performanceId, true);
 
     if (!$card['has_artists']) {
+        $playName = formatPlayTitle($data['site_title'] ?? null, $data['full_name'] ?? null);
         return [
             'success' => false,
             'message' => 'Карточка ещё не сгенерирована для этого представления',
-            'play_name' => $data['full_name'] ?? ''
+            'play_name' => $playName
         ];
     }
 
     return [
         'success' => true,
         'text' => $card['text'],
-        'play_name' => $data['full_name'] ?? '',
+        'play_name' => formatPlayTitle($data['site_title'] ?? null, $data['full_name'] ?? null),
         'event_date' => $data['event_date'],
         'event_time' => $data['event_time']
     ];

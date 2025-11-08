@@ -1,6 +1,8 @@
 <?php
 require_once 'config.php';
 requireAuth();
+require_once 'includes/navigation.php';
+handleLogoutRequest();
 
 $pdo = getDBConnection();
 
@@ -12,7 +14,8 @@ $stmt = $pdo->prepare("
         er.id AS performance_id,
         er.event_date,
         er.event_time,
-        p.full_name AS play_name,
+        p.site_title AS play_site_title,
+        p.full_name AS play_full_name,
         (
             SELECT COUNT(DISTINCT pra.role_id)
             FROM performance_roles_artists pra
@@ -42,16 +45,16 @@ $performances = $stmt->fetchAll();
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Афиша на месяц - Управление составами</title>
     <link rel="stylesheet" href="css/main.css">
-    <link href="https://cdn.tailwindcss.com" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="app/globals.css">
 </head>
 <body>
     <div class="container">
+        <?php renderMainNavigation('schedule'); ?>
         <div class="header">
-            <h1>Афиша на <?php echo date('F Y', mktime(0, 0, 0, $month, 1, $year)); ?></h1>
             <div>
-                <a href="index.php" class="btn-secondary" style="padding: 10px 20px; text-decoration: none;">Главная</a>
-                <a href="scraper.php" class="btn-secondary" style="padding: 10px 20px; text-decoration: none; margin-left: 10px;">Парсинг афиши</a>
+                <h1>Афиша на <?php echo date('F Y', mktime(0, 0, 0, $month, 1, $year)); ?></h1>
+                <p class="header-subtitle">Управление составами и карточками спектаклей</p>
             </div>
         </div>
 
@@ -71,11 +74,14 @@ $performances = $stmt->fetchAll();
                     </tr>
                 </thead>
                 <tbody>
-                    <?php foreach ($performances as $performance): ?>
+                    <?php foreach ($performances as $performance):
+                        $playTitle = formatPlayTitle($performance['play_site_title'] ?? null, $performance['play_full_name'] ?? null);
+                        $playTitleJson = htmlspecialchars(json_encode($playTitle), ENT_QUOTES, 'UTF-8');
+                    ?>
                     <tr>
                         <td><?php echo date('d.m.Y', strtotime($performance['event_date'])); ?></td>
                         <td><?php echo date('H:i', strtotime($performance['event_time'])); ?></td>
-                        <td><?php echo htmlspecialchars($performance['play_name']); ?></td>
+                        <td><?php echo htmlspecialchars($playTitle); ?></td>
                         <td>
                             <?php
                                 if ($performance['total_roles_count'] == 0) {
@@ -90,17 +96,17 @@ $performances = $stmt->fetchAll();
                             ?>
                         </td>
                         <td class="actions">
-                             <a href="edit_cast.php?performance_id=<?php echo $performance['performance_id']; ?>" class="btn-icon btn-primary btn-cast" title="Редактировать состав"></a>
-                             <button type="button"
-                                     class="btn-icon btn-success btn-copy"
-                                     title="Копировать карточку"
-                                     onclick="copyPerformanceCard(<?php echo (int)$performance['performance_id']; ?>, <?php echo htmlspecialchars(json_encode($performance['play_name']), ENT_QUOTES, 'UTF-8'); ?>)">
-                             </button>
-                             <button type="button"
-                                     class="btn-icon btn-info btn-publish"
-                                     title="Опубликовать в VK"
-                                     onclick="publishToVK(<?php echo (int)$performance['performance_id']; ?>, <?php echo htmlspecialchars(json_encode($performance['play_name']), ENT_QUOTES, 'UTF-8'); ?>)">
-                             </button>
+                            <a href="edit_cast.php?performance_id=<?php echo $performance['performance_id']; ?>" class="btn-icon btn-primary btn-cast" title="Редактировать состав"></a>
+                            <button type="button"
+                                    class="btn-icon btn-success btn-copy"
+                                    title="Копировать карточку"
+                                    onclick="copyPerformanceCard(<?php echo (int)$performance['performance_id']; ?>, <?php echo $playTitleJson; ?>)">
+                            </button>
+                            <button type="button"
+                                    class="btn-icon btn-info btn-publish"
+                                    title="Опубликовать в VK"
+                                    onclick="publishToVK(<?php echo (int)$performance['performance_id']; ?>, <?php echo $playTitleJson; ?>)">
+                            </button>
                         </td>
                     </tr>
                     <?php endforeach; ?>

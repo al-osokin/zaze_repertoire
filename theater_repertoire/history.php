@@ -2,6 +2,8 @@
 require_once 'config.php';
 require_once 'db.php';
 requireAuth();
+require_once 'includes/navigation.php';
+handleLogoutRequest();
 
 $message = '';
 $repertoire = null;
@@ -21,14 +23,21 @@ $history = getRepertoireHistory(20); // Больше записей для ис�
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>История афиш - Репертуар театра</title>
     <link rel="stylesheet" href="css/main.css">
-    <link href="https://cdn.tailwindcss.com" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="app/globals.css">
 </head>
 <body>
     <div class="container">
+        <?php renderMainNavigation(); ?>
         <div class="header">
-            <h1><?php echo $repertoire ? 'Просмотр афиши' : 'История афиш'; ?></h1>
-            <a href="index.php" class="btn-secondary">Назад к главной</a>
+            <div>
+                <h1><?php echo $repertoire ? 'Просмотр афиши' : 'История афиш'; ?></h1>
+                <?php if ($repertoire): ?>
+                    <p class="header-subtitle">Сохранённая версия за <?php echo htmlspecialchars($repertoire['month_year']); ?></p>
+                <?php else: ?>
+                    <p class="header-subtitle">Архив сгенерированных афиш</p>
+                <?php endif; ?>
+            </div>
         </div>
 
         <?php if ($repertoire): ?>

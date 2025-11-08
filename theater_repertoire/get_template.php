@@ -25,7 +25,7 @@ $template = getTemplateByPlayId($play['id']);
 
 if (!$template) {
     // Возвращаем признак, что шаблон не найден, но спектакль существует
-    echo json_encode(['success' => false, 'message' => 'Шаблон не найден', 'play_name' => $play['full_name']]);
+    echo json_encode(['success' => false, 'message' => 'Шаблон не найден', 'play_name' => formatPlayTitle($play['site_title'] ?? null, $play['full_name'] ?? null)]);
     exit;
 }
 
@@ -33,6 +33,6 @@ if (!$template) {
 echo json_encode([
     'success' => true,
     'template' => $template['template_text'],
-    'play_name' => $play['full_name']
+    'play_name' => formatPlayTitle($play['site_title'] ?? null, $play['full_name'] ?? null)
 ]);
 ?>

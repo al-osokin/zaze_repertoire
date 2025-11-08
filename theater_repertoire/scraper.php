@@ -6,8 +6,10 @@ require_once 'wiki_generator.php';
 require_once 'vk_config.php';
 require_once 'app/ApiClient/VKApiClient.php';
 require_once 'app/Services/VkRepertoirePublisher.php';
+require_once 'includes/navigation.php';
 
 requireAuth();
+handleLogoutRequest();
 
 $plays = getAllPlays();
 
@@ -256,16 +258,7 @@ function yearOptions(int $selectedYear, int $range = 3): string
 
 function playSiteTitle(array $play): string
 {
-    if (!empty($play['site_title'])) {
-        return $play['site_title'];
-    }
-
-    $fullName = $play['full_name'] ?? '';
-    if (preg_match('/\[\[(?:[^|\]]+\|)?([^\]]+)\]\]/u', $fullName, $match)) {
-        return $match[1];
-    }
-
-    return $fullName;
+    return formatPlayTitle($play['site_title'] ?? null, $play['full_name'] ?? null);
 }
 
 ?>
@@ -276,17 +269,16 @@ function playSiteTitle(array $play): string
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Парсинг афиши - Репертуар театра</title>
     <link rel="stylesheet" href="css/main.css">
-    <link href="https://cdn.tailwindcss.com" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="app/globals.css">
 </head>
 <body>
     <div class="container">
+        <?php renderMainNavigation('scraper'); ?>
         <div class="header">
-            <h1>Парсинг афиши</h1>
             <div>
-                <a href="index.php" class="btn-secondary" style="padding: 10px 20px; text-decoration: none;">Главная</a>
-                <a href="schedule.php" class="btn-primary" style="padding: 10px 20px; text-decoration: none; margin-left: 10px;">Управление составами</a>
-                <a href="admin.php" class="btn-secondary" style="padding: 10px 20px; text-decoration: none; margin-left: 10px;">Спектакли</a>
+                <h1>Парсинг афиши</h1>
+                <p class="header-subtitle">Автоматическая загрузка и сопоставление событий</p>
             </div>
         </div>
 

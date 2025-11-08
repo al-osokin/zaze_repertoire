@@ -111,7 +111,8 @@ function getRoleById(int $roleId): ?array {
     $pdo = getDBConnection();
     $stmt = $pdo->prepare("SELECT * FROM roles WHERE role_id = ?");
     $stmt->execute([$roleId]);
-    return $stmt->fetch();
+    $result = $stmt->fetch();
+    return $result ?: null;
 }
 
 function updatePlayTemplate(int $playId, string $templateText): void {
@@ -159,6 +160,25 @@ function authenticateUser($username, $password) {
 
 function getCurrentUser() {
     return $_SESSION['username'] ?? null;
+}
+
+function formatPlayTitle(?string $siteTitle, ?string $fullName): string
+{
+    $siteTitle = trim((string)($siteTitle ?? ''));
+    if ($siteTitle !== '') {
+        return $siteTitle;
+    }
+
+    $fullName = trim((string)($fullName ?? ''));
+    if ($fullName === '') {
+        return '';
+    }
+
+    if (preg_match('/\[\[(?:[^|\]]+\|)?([^\]]+)\]\]/u', $fullName, $match)) {
+        return $match[1];
+    }
+
+    return $fullName;
 }
 
 function getVkPageNameByPerformanceId(int $performanceId): ?string

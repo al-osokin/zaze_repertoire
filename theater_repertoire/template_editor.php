@@ -4,16 +4,20 @@ require_once 'db.php';
 require_once 'app/Models/PlayTemplateParser.php';
 use App\Models\PlayTemplateParser;
 requireAuth();
+require_once 'includes/navigation.php';
+handleLogoutRequest();
 
 $message = '';
 $playId = $_GET['play_id'] ?? null;
 $play = null;
 $templateElements = [];
+$playDisplayTitle = '';
 
 if ($playId) {
     $play = getPlayById($playId);
     if ($play) {
         $templateElements = getTemplateElementsForPlay($playId);
+        $playDisplayTitle = formatPlayTitle($play['site_title'] ?? null, $play['full_name'] ?? null);
     } else {
         $message = 'Спектакль не найден.';
     }
@@ -47,7 +51,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
 
                 if ($shouldSave) {
                     if ($elementType === 'role') {
-                        $resolvedRoleId = resolveRoleValueToId((int)$playId, (string)$elementValue, $sortOrder);
+                        $existingRoleId = isset($element['role_id']) ? (int)$element['role_id'] : null;
+                        $resolvedRoleId = resolveRoleValueToId((int)$playId, (string)$elementValue, $sortOrder, $existingRoleId);
                         if ($resolvedRoleId === null) {
                             continue;
                         }
@@ -93,9 +98,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Редактирование шаблона спектакля: <?php echo htmlspecialchars($play['full_name'] ?? ''); ?></title>
+    <title>Редактирование шаблона спектакля: <?php echo htmlspecialchars($playDisplayTitle); ?></title>
     <link rel="stylesheet" href="css/main.css">
-    <link href="https://cdn.tailwindcss.com/2.2.19/tailwind.min.css" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
     <link rel="stylesheet" href="app/globals.css">
     <style>
         .element-item {
@@ -120,10 +125,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
 </head>
 <body>
     <div class="container">
+        <?php renderMainNavigation('plays'); ?>
         <div class="header">
-            <h1>Редактирование шаблона: <?php echo htmlspecialchars($play['full_name'] ?? ''); ?></h1>
             <div>
-                <a href="admin.php" class="btn-secondary" style="padding: 10px 20px; text-decoration: none;">К управлению спектаклями</a>
+                <h1>Редактирование шаблона: <?php echo htmlspecialchars($playDisplayTitle); ?></h1>
+                <p class="header-subtitle">Управление элементами карточки спектакля</p>
             </div>
         </div>
 
@@ -135,20 +141,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
             <div class="section">
                 <h2>Элементы шаблона</h2>
                 <div id="template-elements-list">
-                    <?php foreach ($templateElements as $element): ?>
-                        <div class="element-item" data-id="<?php echo $element['id']; ?>" data-type="<?php echo htmlspecialchars($element['element_type']); ?>" data-value="<?php echo htmlspecialchars($element['element_value']); ?>" data-heading-level="<?php echo (int)($element['heading_level'] ?? 0); ?>">
+                    <?php foreach ($templateElements as $element):
+                        $elementType = $element['element_type'];
+                        $elementValue = $element['element_value'];
+                        $roleNameForValue = '';
+                        $roleIdAttr = '';
+
+                        if ($elementType === 'role') {
+                            $role = getRoleById($elementValue);
+                            $roleNameForValue = $role['role_name'] ?? '';
+                            $roleIdAttr = (string)$elementValue;
+                        }
+                    ?>
+                        <div class="element-item"
+                             data-id="<?php echo $element['id']; ?>"
+                             data-type="<?php echo htmlspecialchars($elementType); ?>"
+                             data-value="<?php echo htmlspecialchars($elementType === 'role' && $roleNameForValue !== '' ? $roleNameForValue : $elementValue); ?>"
+                             data-role-id="<?php echo htmlspecialchars($roleIdAttr); ?>"
+                             data-heading-level="<?php echo (int)($element['heading_level'] ?? 0); ?>">
                             <span class="handle">☰</span>
                             <div class="content">
-                                <?php if ($element['element_type'] === 'heading'): ?>
+                                <?php if ($elementType === 'heading'): ?>
                                     <strong>Заголовок (уровень <?php echo (int)($element['heading_level'] ?? 2); ?>):</strong> <span class="element-text"><?php echo htmlspecialchars($element['element_value']); ?></span>
-                                <?php elseif ($element['element_type'] === 'image'): ?>
+                                <?php elseif ($elementType === 'image'): ?>
                                     <strong>Изображение:</strong> <span class="element-text"><?php echo htmlspecialchars($element['element_value']); ?></span>
-                                <?php elseif ($element['element_type'] === 'role'): ?>
+                                <?php elseif ($elementType === 'role'): ?>
                                     <?php
-                                        $role = getRoleById($element['element_value']);
-                                        echo '<strong>Роль:</strong> <span class="element-text">' . htmlspecialchars($role['role_name'] ?? 'Неизвестная роль') . '</span>';
+                                        $role = $role ?? getRoleById($elementValue);
+                                        $roleDisplay = $role['role_name'] ?? '';
+                                        if ($roleDisplay === '' && $roleIdAttr !== '') {
+                                            $roleDisplay = 'ID: ' . $roleIdAttr;
+                                        }
+                                        echo '<strong>Роль:</strong> <span class="element-text">' . htmlspecialchars($roleDisplay ?: 'Неизвестная роль') . '</span>';
                                     ?>
-                                <?php elseif ($element['element_type'] === 'newline'): ?>
+                                <?php elseif ($elementType === 'newline'): ?>
                                     <em>Пустая строка</em>
                                 <?php endif; ?>
                             </div>
@@ -189,6 +215,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
             onEnd: updateElementsJson
         });
 
+        function escapeHtml(value = '') {
+            const div = document.createElement('div');
+            div.textContent = value ?? '';
+            return div.innerHTML;
+        }
+
         function updateElementsJson() {
         const elements = [];
         templateElementsList.querySelectorAll('.element-item').forEach(item => {
@@ -198,6 +230,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
             };
             if (item.dataset.headingLevel && parseInt(item.dataset.headingLevel, 10) > 0) {
                 element.level = parseInt(item.dataset.headingLevel, 10);
+            }
+            if (item.dataset.type === 'role' && item.dataset.roleId) {
+                element.role_id = item.dataset.roleId;
             }
             elements.push(element);
         });
@@ -228,15 +263,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
         });
 
         document.getElementById('add-role').addEventListener('click', async () => {
-            // Здесь нужно будет получить список ролей из БД или предложить ввести ID роли
-            // Для простоты пока предложим ввести ID роли
-            const roleId = prompt('Введите ID роли:');
-            if (roleId) {
-                // В реальном приложении здесь нужно будет сделать AJAX-запрос для получения имени роли по ID
-                // и отобразить его пользователю.
-                const newItem = createTemplateElement('role', roleId);
-                templateElementsList.appendChild(newItem);
-                updateElementsJson();
+            const roleName = prompt('Введите название роли (можно без кавычек, они добавятся автоматически)');
+            if (roleName) {
+                const trimmed = roleName.trim();
+                if (trimmed !== '') {
+                    const newItem = createTemplateElement('role', trimmed);
+                    templateElementsList.appendChild(newItem);
+                    updateElementsJson();
+                }
             }
         });
 
@@ -274,19 +308,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
                 } else if (item.dataset.type === 'image') {
                     newValue = prompt('Редактировать URL изображения:', item.dataset.value);
                 } else if (item.dataset.type === 'role') {
-                    newValue = prompt('Редактировать ID роли:', item.dataset.value);
+                    newValue = prompt('Редактировать название роли:', item.dataset.value);
                 } else if (item.dataset.type === 'newline') {
                     alert('Пустую строку редактировать не нужно. Вы можете удалить её и добавить заново.');
                     newValue = null;
                 }
 
                 if (newValue !== null && newValue !== '') {
-                    item.dataset.value = newValue;
+                    item.dataset.value = newValue.trim();
+                    // roleId остаётся, чтобы обновлять существующие роли
                     const textSpan = item.querySelector('.element-text');
                     if (textSpan) {
                         if (item.dataset.type === 'role') {
-                            const isNumericValue = /^\d+$/.test(newValue);
-                            textSpan.textContent = isNumericValue ? `ID: ${newValue}` : newValue;
+                            textSpan.textContent = newValue.trim();
                         } else if (item.dataset.type === 'heading') {
                             textSpan.textContent = newValue;
                             const strong = item.querySelector('.content strong');
@@ -312,17 +346,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
             } else {
                 div.dataset.headingLevel = '';
             }
+            if (type === 'role') {
+                div.dataset.roleId = options.roleId || '';
+            }
 
             let contentHtml = '';
             if (type === 'heading') {
                 const level = div.dataset.headingLevel || 2;
-                contentHtml = `<strong>Заголовок (уровень ${level}):</strong> <span class="element-text">${value}</span>`;
+                contentHtml = `<strong>Заголовок (уровень ${level}):</strong> <span class="element-text">${escapeHtml(value)}</span>`;
             } else if (type === 'image') {
-                contentHtml = `<strong>Изображение:</strong> <span class="element-text">${value}</span>`;
+                contentHtml = `<strong>Изображение:</strong> <span class="element-text">${escapeHtml(value)}</span>`;
             } else if (type === 'role') {
-                const isNumericValue = /^\d+$/.test(value);
-                const displayText = isNumericValue ? `ID: ${value}` : value;
-                contentHtml = `<strong>Роль:</strong> <span class="element-text">${displayText}</span>`;
+                const displayText = value || (options.roleId ? `ID: ${options.roleId}` : '');
+                contentHtml = `<strong>Роль:</strong> <span class="element-text">${escapeHtml(displayText)}</span>`;
             } else if (type === 'newline') {
                 contentHtml = `<em>Пустая строка</em>`;
             }
@@ -344,22 +380,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
 </html>
 
 <?php
-function resolveRoleValueToId(int $playId, string $rawValue, int $sortOrder): ?int
+function resolveRoleValueToId(int $playId, string $rawValue, int $sortOrder, ?int $existingRoleId = null): ?int
 {
     $value = trim($rawValue);
     if ($value === '') {
         return null;
     }
 
+    if ($existingRoleId) {
+        $pdo = getDBConnection();
+        $stmt = $pdo->prepare("SELECT role_id FROM roles WHERE role_id = ? AND play_id = ?");
+        $stmt->execute([$existingRoleId, $playId]);
+        $roleExists = $stmt->fetchColumn();
+
+        if ($roleExists) {
+            $roleName = normalizeRoleNameForStorage($value);
+            $expectedType = detectExpectedArtistTypeForTemplate($roleName);
+            $update = $pdo->prepare("UPDATE roles SET role_name = ?, sort_order = ?, expected_artist_type = ?, updated_at = NOW() WHERE role_id = ?");
+            $update->execute([$roleName, $sortOrder, $expectedType, $existingRoleId]);
+            return (int)$existingRoleId;
+        }
+    }
+
     if (ctype_digit($value)) {
         return (int)$value;
     }
 
-    $roleName = $value;
-    if (!str_starts_with($roleName, "'''")) {
-        $roleName = "'''{$roleName}'''";
-    }
-
+    $roleName = normalizeRoleNameForStorage($value);
     $expectedType = detectExpectedArtistTypeForTemplate($roleName);
 
     $pdo = getDBConnection();
@@ -395,4 +442,16 @@ function detectExpectedArtistTypeForTemplate(string $roleName): string
     }
 
     return 'artist';
+}
+
+function normalizeRoleNameForStorage(string $value): string
+{
+    $roleName = trim($value);
+    if ($roleName === '') {
+        return '';
+    }
+    if (!str_starts_with($roleName, "'''")) {
+        $roleName = "'''{$roleName}'''";
+    }
+    return $roleName;
 }
