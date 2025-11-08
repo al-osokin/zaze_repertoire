@@ -5,9 +5,18 @@ require_once 'app/Models/PlayTemplateParser.php'; // Подключаем пар
 
 requireAuth();
 
+function normalizePlaceholderSignature(string $text): string {
+    if ($text === '') {
+        return '';
+    }
+    $upper = mb_strtoupper(trim($text), 'UTF-8');
+    $normalized = preg_replace('/[\s\-]+/u', '', $upper);
+    return $normalized ?? '';
+}
+
 $pdo = getDBConnection();
-$customNamePlaceholder = 'СОСТАВ УТОЧНЯЕТСЯ';
-$customNamePlaceholderUpper = mb_strtoupper($customNamePlaceholder, 'UTF-8');
+$customNamePlaceholder = '-- СОСТАВ УТОЧНЯЕТСЯ --';
+$customNamePlaceholderSignature = normalizePlaceholderSignature($customNamePlaceholder);
 $artistTypeLabels = [
     'artist' => 'Артист',
     'conductor' => 'Дирижёр',
@@ -47,11 +56,26 @@ $assignedStmt = $pdo->prepare("
     SELECT role_id, artist_id, custom_artist_name, sort_order_in_role, is_first_time
     FROM performance_roles_artists
     WHERE performance_id = ?
+    ORDER BY role_id, sort_order_in_role
 ");
 $assignedStmt->execute([$performanceId]);
 $assignedArtists = [];
+$hasRealAssignments = false;
 foreach ($assignedStmt->fetchAll() as $item) {
     $assignedArtists[$item['role_id']][] = $item;
+
+    if ($hasRealAssignments) {
+        continue;
+    }
+
+    $customName = trim((string)($item['custom_artist_name'] ?? ''));
+    if (!empty($item['artist_id']) || ($customName !== '' && normalizePlaceholderSignature($customName) !== $customNamePlaceholderSignature)) {
+        $hasRealAssignments = true;
+    }
+}
+
+if (!$hasRealAssignments) {
+    $assignedArtists = [];
 }
 
 // Если для этого представления еще нет назначенных ролей,
@@ -67,6 +91,10 @@ if (empty($assignedArtists)) {
     ");
     $defaultsStmt->execute([$playId]);
     $defaultCast = $defaultsStmt->fetchAll();
+
+    if (empty($defaultCast)) {
+        $defaultCast = fetchLastPerformanceCast($pdo, (int)$playId, (int)$performanceId, $customNamePlaceholderSignature);
+    }
 
     if (!empty($defaultCast)) {
         // Используем последний сохраненный состав для этого спектакля
@@ -101,7 +129,7 @@ $roleArtistExclusions = [
 ];
 
 // Функция для получения и сортировки артистов для конкретной роли
-function getArtistsForRole($pdo, $roleId, $artistType, $allArtistsByTypeList, array $roleArtistExclusions = []) {
+function getArtistsForRole($pdo, $roleId, $artistType, $allArtistsByTypeList, array $roleArtistExclusions = [], $selectedArtistId = null) {
     $typesForRole = [$artistType];
     if ($artistType === 'artist') {
         $typesForRole[] = 'group';
@@ -152,7 +180,13 @@ function getArtistsForRole($pdo, $roleId, $artistType, $allArtistsByTypeList, ar
     );
 
     // Объединяем: частые артисты + остальные артисты (по алфавиту)
-    return array_merge($frequentArtists, $otherArtists);
+    $orderedArtists = array_merge($frequentArtists, $otherArtists);
+
+    if ($selectedArtistId) {
+        $orderedArtists = prioritizeSelectedArtist($orderedArtists, (int)$selectedArtistId, (int)$roleId, $pdo);
+    }
+
+    return $orderedArtists;
 }
 
 
@@ -173,7 +207,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 foreach ($artistsData as $sortOrder => $artistInfo) {
                     $artistId = $artistInfo['artist_id'] ?? null;
                     $customName = trim($artistInfo['custom_name'] ?? '');
-                    if ($customName !== '' && mb_strtoupper($customName, 'UTF-8') === $customNamePlaceholderUpper) {
+                    if ($customName !== '' && normalizePlaceholderSignature($customName) === $customNamePlaceholderSignature) {
                         $customName = '';
                     }
 
@@ -232,6 +266,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
 
             $pdo->commit();
+            saveLastCastSnapshot($pdo, (int)$performanceId, (int)$performance['play_id'], $customNamePlaceholderSignature);
             $message = "Состав успешно сохранен!";
             // Перезагружаем данные после сохранения и добавляем якорь для прокрутки
             header("Location: edit_cast.php?performance_id=$performanceId&message=" . urlencode($message) . "&saved=1");
@@ -285,7 +320,7 @@ if ($cardRequest || isset($_GET['show_card'])) {
 
             foreach ($currentAssignmentsStmt->fetchAll() as $assignment) {
                 $assignmentCustomName = trim($assignment['custom_artist_name'] ?? '');
-                if ($assignmentCustomName !== '' && mb_strtoupper($assignmentCustomName, 'UTF-8') === $customNamePlaceholderUpper) {
+                if ($assignmentCustomName !== '' && normalizePlaceholderSignature($assignmentCustomName) === $customNamePlaceholderSignature) {
                     $assignmentCustomName = '';
                 }
                 if (empty($assignment['artist_id']) && $assignmentCustomName === '') {
@@ -369,7 +404,7 @@ if ($cardRequest || isset($_GET['show_card'])) {
                                     <select name="roles[<?php echo $role['role_id']; ?>][<?php echo $idx; ?>][artist_id]" class="artist-select">
                                         <option value="">-- СОСТАВ УТОЧНЯЕТСЯ --</option>
                                         <?php
-                                        $artistsForRole = getArtistsForRole($pdo, $role['role_id'], $role['expected_artist_type'], $allArtistsByTypeList, $roleArtistExclusions);
+                                        $artistsForRole = getArtistsForRole($pdo, $role['role_id'], $role['expected_artist_type'], $allArtistsByTypeList, $roleArtistExclusions, $assigned['artist_id'] ?? null);
                                         foreach ($artistsForRole as $artist): ?>
                                             <option value="<?php echo $artist['artist_id']; ?>" <?php echo ($assigned['artist_id'] == $artist['artist_id']) ? 'selected' : ''; ?>>
                                                 <?php echo htmlspecialchars($artist['last_name'] . ' ' . $artist['first_name']); ?>
@@ -599,3 +634,156 @@ window.addEventListener('load', () => {
 
 </body>
 </html>
+<?php
+
+function saveLastCastSnapshot(PDO $pdo, int $performanceId, int $playId, string $placeholderSignature): void
+{
+    try {
+        $pdo->beginTransaction();
+
+        $deleteDefaultsStmt = $pdo->prepare("DELETE FROM play_role_last_cast WHERE play_id = ?");
+        $deleteDefaultsStmt->execute([$playId]);
+
+        $currentAssignmentsStmt = $pdo->prepare("
+            SELECT role_id, artist_id, custom_artist_name, sort_order_in_role, is_first_time
+            FROM performance_roles_artists
+            WHERE performance_id = ?
+            ORDER BY role_id, sort_order_in_role
+        ");
+        $currentAssignmentsStmt->execute([$performanceId]);
+
+        $insertDefaultStmt = $pdo->prepare("
+            INSERT INTO play_role_last_cast (play_id, role_id, sort_order_in_role, artist_id, custom_artist_name, is_first_time)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ");
+
+        foreach ($currentAssignmentsStmt->fetchAll() as $assignment) {
+            $assignmentCustomName = trim((string)($assignment['custom_artist_name'] ?? ''));
+            if ($assignmentCustomName !== '' && normalizePlaceholderSignature($assignmentCustomName) === $placeholderSignature) {
+                $assignmentCustomName = '';
+            }
+
+            if (empty($assignment['artist_id']) && $assignmentCustomName === '') {
+                continue;
+            }
+
+            $insertDefaultStmt->execute([
+                $playId,
+                $assignment['role_id'],
+                $assignment['sort_order_in_role'],
+                $assignment['artist_id'],
+                $assignmentCustomName === '' ? null : $assignmentCustomName,
+                $assignment['is_first_time']
+            ]);
+        }
+
+        $pdo->commit();
+    } catch (Exception $e) {
+        $pdo->rollBack();
+        error_log("Не удалось сохранить состав по умолчанию для спектакля {$playId}: " . $e->getMessage());
+    }
+}
+
+/**
+ * Берёт состав последнего сыгранного представления спектакля.
+ *
+ * @return array<int,array<string,mixed>>
+ */
+function fetchLastPerformanceCast(PDO $pdo, int $playId, int $currentPerformanceId, string $placeholderSignature): array
+{
+    $stmt = $pdo->prepare("
+        SELECT
+            er.id AS performance_id,
+            er.event_date,
+            er.event_time,
+            pra.role_id,
+            pra.artist_id,
+            pra.custom_artist_name,
+            pra.sort_order_in_role,
+            pra.is_first_time
+        FROM events_raw er
+        JOIN performance_roles_artists pra ON pra.performance_id = er.id
+        WHERE er.play_id = ?
+        ORDER BY er.event_date DESC, er.event_time DESC, er.id DESC, pra.role_id, pra.sort_order_in_role
+    ");
+    $stmt->execute([$playId]);
+
+    $buffer = [];
+    $currentId = null;
+    $hasReal = false;
+
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $perfId = (int)$row['performance_id'];
+        if ($perfId === $currentPerformanceId) {
+            continue;
+        }
+
+        if ($currentId === null) {
+            $currentId = $perfId;
+        }
+
+        if ($perfId !== $currentId) {
+            if ($hasReal) {
+                return $buffer;
+            }
+            $buffer = [];
+            $hasReal = false;
+            $currentId = $perfId;
+        }
+
+        $customName = trim((string)($row['custom_artist_name'] ?? ''));
+        $isReal = !empty($row['artist_id']) || ($customName !== '' && normalizePlaceholderSignature($customName) !== $placeholderSignature);
+        if ($isReal) {
+            $hasReal = true;
+        }
+
+        $buffer[] = [
+            'role_id' => (int)$row['role_id'],
+            'artist_id' => $row['artist_id'],
+            'custom_artist_name' => $customName,
+            'sort_order_in_role' => (int)$row['sort_order_in_role'],
+            'is_first_time' => (int)$row['is_first_time'],
+        ];
+    }
+
+    if ($hasReal && !empty($buffer)) {
+        return $buffer;
+    }
+
+    return [];
+}
+
+/**
+ * Перемещает выбранного артиста в начало списка, чтобы select сразу фокусировался на нем.
+ *
+ * @param array<int,array<string,mixed>> $artists
+ * @return array<int,array<string,mixed>>
+ */
+function prioritizeSelectedArtist(array $artists, int $selectedArtistId, int $roleId, PDO $pdo): array
+{
+    foreach ($artists as $index => $artist) {
+        if ((int)($artist['artist_id'] ?? 0) === $selectedArtistId) {
+            if ($index === 0) {
+                return $artists;
+            }
+            $selected = $artists[$index];
+            unset($artists[$index]);
+            array_unshift($artists, $selected);
+            return array_values($artists);
+        }
+    }
+
+    $stmt = $pdo->prepare('SELECT artist_id, first_name, last_name FROM artists WHERE artist_id = ?');
+    $stmt->execute([$selectedArtistId]);
+    $artistRow = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($artistRow) {
+        $artistRow['type'] = $artistRow['type'] ?? 'artist';
+        array_unshift($artists, [
+            'artist_id' => (int)$artistRow['artist_id'],
+            'first_name' => $artistRow['first_name'] ?? '',
+            'last_name' => $artistRow['last_name'] ?? '',
+        ]);
+    }
+
+    return $artists;
+}
