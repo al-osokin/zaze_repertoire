@@ -46,6 +46,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
                 }
 
                 if ($shouldSave) {
+                    if ($elementType === 'role') {
+                        $resolvedRoleId = resolveRoleValueToId((int)$playId, (string)$elementValue, $sortOrder);
+                        if ($resolvedRoleId === null) {
+                            continue;
+                        }
+                        $elementValue = (string)$resolvedRoleId;
+                    }
                     saveTemplateElement($playId, $elementType, $elementValue, $sortOrder, $headingLevel);
                 }
             }
@@ -278,8 +285,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
                     const textSpan = item.querySelector('.element-text');
                     if (textSpan) {
                         if (item.dataset.type === 'role') {
-                            // Здесь также нужно обновить отображаемое имя роли, если это возможно
-                            textSpan.textContent = `ID: ${newValue}`; // Временно
+                            const isNumericValue = /^\d+$/.test(newValue);
+                            textSpan.textContent = isNumericValue ? `ID: ${newValue}` : newValue;
                         } else if (item.dataset.type === 'heading') {
                             textSpan.textContent = newValue;
                             const strong = item.querySelector('.content strong');
@@ -313,7 +320,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
             } else if (type === 'image') {
                 contentHtml = `<strong>Изображение:</strong> <span class="element-text">${value}</span>`;
             } else if (type === 'role') {
-                contentHtml = `<strong>Роль:</strong> <span class="element-text">ID: ${value}</span>`; // Временно
+                const isNumericValue = /^\d+$/.test(value);
+                const displayText = isNumericValue ? `ID: ${value}` : value;
+                contentHtml = `<strong>Роль:</strong> <span class="element-text">${displayText}</span>`;
             } else if (type === 'newline') {
                 contentHtml = `<em>Пустая строка</em>`;
             }
@@ -333,3 +342,57 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
     </script>
 </body>
 </html>
+
+<?php
+function resolveRoleValueToId(int $playId, string $rawValue, int $sortOrder): ?int
+{
+    $value = trim($rawValue);
+    if ($value === '') {
+        return null;
+    }
+
+    if (ctype_digit($value)) {
+        return (int)$value;
+    }
+
+    $roleName = $value;
+    if (!str_starts_with($roleName, "'''")) {
+        $roleName = "'''{$roleName}'''";
+    }
+
+    $expectedType = detectExpectedArtistTypeForTemplate($roleName);
+
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("SELECT role_id FROM roles WHERE play_id = ? AND role_name = ?");
+    $stmt->execute([$playId, $roleName]);
+    $roleId = $stmt->fetchColumn();
+
+    if ($roleId) {
+        $update = $pdo->prepare("UPDATE roles SET sort_order = ?, expected_artist_type = ?, updated_at = NOW() WHERE role_id = ?");
+        $update->execute([$sortOrder, $expectedType, $roleId]);
+        return (int)$roleId;
+    }
+
+    $insert = $pdo->prepare("INSERT INTO roles (play_id, role_name, expected_artist_type, sort_order) VALUES (?, ?, ?, ?)");
+    $insert->execute([$playId, $roleName, $expectedType, $sortOrder]);
+    return (int)$pdo->lastInsertId();
+}
+
+function detectExpectedArtistTypeForTemplate(string $roleName): string
+{
+    $normalizedRoleName = normalizeRoleName($roleName);
+
+    if (mb_stripos($normalizedRoleName, 'Дирижёр') !== false || mb_stripos($normalizedRoleName, 'Дирижер') !== false) {
+        return 'conductor';
+    }
+
+    if (
+        mb_stripos($normalizedRoleName, 'Клавесин') !== false ||
+        mb_stripos($normalizedRoleName, 'Концертмейстер') !== false ||
+        mb_stripos($normalizedRoleName, 'Пианист') !== false
+    ) {
+        return 'pianist';
+    }
+
+    return 'artist';
+}
