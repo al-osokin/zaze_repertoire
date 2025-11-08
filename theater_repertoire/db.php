@@ -88,10 +88,10 @@ function getTemplateElementsForPlay(int $playId): array {
     return $stmt->fetchAll();
 }
 
-function saveTemplateElement(int $playId, string $elementType, string $elementValue, int $sortOrder): void {
+function saveTemplateElement(int $playId, string $elementType, string $elementValue, int $sortOrder, ?int $headingLevel = null): void {
     $pdo = getDBConnection();
-    $stmt = $pdo->prepare("INSERT INTO template_elements (play_id, element_type, element_value, sort_order) VALUES (?, ?, ?, ?)");
-    $stmt->execute([$playId, $elementType, $elementValue, $sortOrder]);
+    $stmt = $pdo->prepare("INSERT INTO template_elements (play_id, element_type, element_value, sort_order, heading_level) VALUES (?, ?, ?, ?, ?)");
+    $stmt->execute([$playId, $elementType, $elementValue, $sortOrder, $headingLevel]);
 }
 
 function deleteTemplateElementsByPlayId(int $playId): void {
@@ -347,9 +347,15 @@ function buildPerformanceCard(int $performanceId, bool $includePhoto = true): ar
 
     foreach ($elements as $element) {
         if ($element['element_type'] === 'heading') {
-            $level = $element['heading_level'] ?? 3; // По умолчанию 3, если не указан
-            $headingText = $element['element_value'];
-            $lines[] = str_repeat('=', $level) . $headingText . str_repeat('=', $level);
+            $level = (int)($element['heading_level'] ?? 3); // По умолчанию 3, если не указан
+            if ($level < 2) {
+                $level = 2;
+            }
+            $headingText = trim((string)$element['element_value']);
+            $headingText = trim($headingText, '= ');
+            if ($headingText !== '') {
+                $lines[] = str_repeat('=', $level) . $headingText . str_repeat('=', $level);
+            }
         } elseif ($element['element_type'] === 'image') {
             $lines[] = $element['element_value'];
         } elseif ($element['element_type'] === 'newline') {

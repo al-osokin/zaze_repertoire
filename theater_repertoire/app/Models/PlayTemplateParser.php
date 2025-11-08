@@ -62,24 +62,30 @@ class PlayTemplateParser
             }
 
             // Попытка разобрать строки с ролями и артистами
-            if (!str_contains($line, '—')) {
-                if (preg_match('/^(\'\'\'[^\'\'\']+\'\'\')\s*$/u', $line, $matches)) {
-                    $roleName = trim($matches[1]); // Сохраняем полную вики-разметку
-                    $expectedArtistType = $this->detectExpectedArtistType($roleName);
+            $rawRolePart = null;
+            $artistNamesStr = null;
 
-                    $roleId = $this->findOrCreateRole($playId, $roleName, $expectedArtistType, $currentSortOrder);
-                    $this->saveTemplateElement($playId, 'role', $roleId, $currentSortOrder++);
+            if (str_contains($line, '—')) {
+                $parts = preg_split('/\s+—\s+/u', $line, 2);
+                if (!$parts || count($parts) < 2) {
+                    continue;
                 }
+                [$rawRolePart, $artistNamesStr] = array_map('trim', $parts);
+            } elseif (preg_match('/^(\'\'\'[^\'\'\']+\'\'\')\s*:\s*(.+)$/u', $line, $matches)) {
+                $rawRolePart = trim($matches[1]);
+                $artistNamesStr = trim($matches[2]);
+            } elseif (preg_match('/^(\'\'\'[^\'\'\']+\'\'\')\s*$/u', $line, $matches)) {
+                $roleName = trim($matches[1]);
+                $expectedArtistType = $this->detectExpectedArtistType($roleName);
+
+                $roleId = $this->findOrCreateRole($playId, $roleName, $expectedArtistType, $currentSortOrder);
+                $this->saveTemplateElement($playId, 'role', $roleId, $currentSortOrder++);
+                continue;
+            } else {
                 continue;
             }
 
-            $parts = preg_split('/\s+—\s+/u', $line, 2);
-            if (!$parts || count($parts) < 2) {
-                continue;
-            }
-
-            [$rawRolePart, $artistNamesStr] = array_map('trim', $parts);
-            if ($artistNamesStr === '') {
+            if ($artistNamesStr === null || $artistNamesStr === '') {
                 continue;
             }
 
@@ -92,43 +98,6 @@ class PlayTemplateParser
 
             $roleId = $this->findOrCreateRole($playId, $roleName, $expectedArtistType, $currentSortOrder);
             $this->saveTemplateElement($playId, 'role', $roleId, $currentSortOrder++);
-
-            $artistNames = array_map('trim', explode(',', $artistNamesStr));
-            foreach ($artistNames as $artistFullName) {
-                $artistFullName = trim(str_replace(["'''", "''"], '', $artistFullName));
-                if ($artistFullName === '') {
-                    continue;
-                }
-
-                // Убираем пометки вида (''впервые в роли'') или (впервые в роли)
-                $artistFullName = preg_replace("/\\(''+.*?''\\)/u", '', $artistFullName);
-                $artistFullName = preg_replace("/\(([^)]*впервые в роли[^)]*)\)/iu", '', $artistFullName);
-                $artistFullName = preg_replace('/\s+/u', ' ', trim($artistFullName));
-                if ($artistFullName === '') {
-                    continue;
-                }
-
-                $firstName = '';
-                $lastName = '';
-
-                $knownGroupNames = ['Ансамбль', 'ансамбль', 'Хор', 'хор', 'Детский хор', 'оркестр', 'Оркестр'];
-                if (in_array($artistFullName, $knownGroupNames, true)) {
-                    $lastName = $artistFullName;
-                } else {
-                    $parts = preg_split('/\s+/u', $artistFullName);
-                    if (count($parts) === 1) {
-                        $lastName = $artistFullName;
-                    } else {
-                        $lastName = array_pop($parts);
-                        $firstName = implode(' ', $parts);
-                    }
-                }
-
-                $artistId = $this->findOrCreateArtist($firstName, $lastName, $expectedArtistType);
-                if ($artistId) {
-                    $this->saveRoleArtistHistory($roleId, $artistId);
-                }
-            }
         }
         return $elementsData; // Возвращаем пустой массив, так как элементы сохраняются напрямую
     }

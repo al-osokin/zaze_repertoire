@@ -1,6 +1,8 @@
 <?php
 require_once 'config.php';
 require_once 'db.php';
+require_once 'app/Models/PlayTemplateParser.php';
+use App\Models\PlayTemplateParser;
 requireAuth();
 
 $message = '';
@@ -31,8 +33,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
                 $elementValue = $element['value'] ?? '';
                 $sortOrder = $index;
 
-                if (!empty($elementType) && !empty($elementValue)) {
-                    saveTemplateElement($playId, $elementType, $elementValue, $sortOrder);
+                $headingLevel = null;
+                if ($elementType === 'heading') {
+                    $headingLevel = isset($element['level']) ? (int)$element['level'] : 2;
+                }
+
+                $shouldSave = false;
+                if ($elementType === 'newline') {
+                    $shouldSave = true;
+                } elseif (!empty($elementType) && $elementValue !== '') {
+                    $shouldSave = true;
+                }
+
+                if ($shouldSave) {
+                    saveTemplateElement($playId, $elementType, $elementValue, $sortOrder, $headingLevel);
                 }
             }
             $message = 'Шаблон успешно сохранен.';
@@ -44,13 +58,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
         // Проверяем, есть ли уже элементы для этого спектакля
         if (empty($templateElements)) {
             // Добавляем минимальную шаблонную структуру
-            saveTemplateElement($playId, 'heading', 'В ролях:', 0);
-            saveTemplateElement($playId, 'heading', 'СОСТАВ УТОЧНЯЕТСЯ', 1);
+            saveTemplateElement($playId, 'heading', 'В ролях:', 0, 2);
+            saveTemplateElement($playId, 'heading', 'СОСТАВ УТОЧНЯЕТСЯ', 1, 3);
             saveTemplateElement($playId, 'image', 'default_image.jpg', 2); // Пример
             $message = 'Добавлен минимальный шаблон.';
             $templateElements = getTemplateElementsForPlay($playId);
         } else {
             $message = 'Шаблон уже существует, минимальный шаблон не добавлен.';
+        }
+    } elseif (isset($_POST['reparse_template'])) {
+        $templateRow = getTemplateByPlayId($playId);
+        $templateText = trim((string)($templateRow['template_text'] ?? ''));
+        if ($templateText === '') {
+            $message = 'Текст шаблона пуст. Нечего парсить.';
+        } else {
+            $parser = new PlayTemplateParser(getDBConnection());
+            $parser->parseTemplate((int)$playId, $templateText);
+            $templateElements = getTemplateElementsForPlay($playId);
+            $message = 'Шаблон перепарсен из текстового варианта.';
         }
     }
 }
@@ -104,11 +129,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
                 <h2>Элементы шаблона</h2>
                 <div id="template-elements-list">
                     <?php foreach ($templateElements as $element): ?>
-                        <div class="element-item" data-id="<?php echo $element['id']; ?>" data-type="<?php echo htmlspecialchars($element['element_type']); ?>" data-value="<?php echo htmlspecialchars($element['element_value']); ?>">
+                        <div class="element-item" data-id="<?php echo $element['id']; ?>" data-type="<?php echo htmlspecialchars($element['element_type']); ?>" data-value="<?php echo htmlspecialchars($element['element_value']); ?>" data-heading-level="<?php echo (int)($element['heading_level'] ?? 0); ?>">
                             <span class="handle">☰</span>
                             <div class="content">
                                 <?php if ($element['element_type'] === 'heading'): ?>
-                                    <strong>Заголовок:</strong> <span class="element-text"><?php echo htmlspecialchars($element['element_value']); ?></span>
+                                    <strong>Заголовок (уровень <?php echo (int)($element['heading_level'] ?? 2); ?>):</strong> <span class="element-text"><?php echo htmlspecialchars($element['element_value']); ?></span>
                                 <?php elseif ($element['element_type'] === 'image'): ?>
                                     <strong>Изображение:</strong> <span class="element-text"><?php echo htmlspecialchars($element['element_value']); ?></span>
                                 <?php elseif ($element['element_type'] === 'role'): ?>
@@ -116,6 +141,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
                                         $role = getRoleById($element['element_value']);
                                         echo '<strong>Роль:</strong> <span class="element-text">' . htmlspecialchars($role['role_name'] ?? 'Неизвестная роль') . '</span>';
                                     ?>
+                                <?php elseif ($element['element_type'] === 'newline'): ?>
+                                    <em>Пустая строка</em>
                                 <?php endif; ?>
                             </div>
                             <div class="actions">
@@ -130,6 +157,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
                     <button type="button" id="add-heading" class="btn-secondary">Добавить заголовок</button>
                     <button type="button" id="add-image" class="btn-secondary">Добавить картинку</button>
                     <button type="button" id="add-role" class="btn-secondary">Добавить роль</button>
+                    <button type="button" id="add-newline" class="btn-secondary">Добавить пустую строку</button>
                 </div>
 
                 <form method="post" class="mt-4">
@@ -137,6 +165,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
                     <input type="hidden" name="elements_json" id="elements-json-input">
                     <button type="submit" name="save_elements" class="btn-primary">Сохранить шаблон</button>
                     <button type="submit" name="add_default_template" class="btn-secondary">Добавить минимальный шаблон</button>
+                    <button type="submit" name="reparse_template" class="btn-secondary">Перепарсить из текста</button>
                 </form>
             </div>
         <?php endif; ?>
@@ -154,20 +183,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
         });
 
         function updateElementsJson() {
-            const elements = [];
-            templateElementsList.querySelectorAll('.element-item').forEach(item => {
-                elements.push({
-                    type: item.dataset.type,
-                    value: item.dataset.value
-                });
-            });
-            elementsJsonInput.value = JSON.stringify(elements);
-        }
+        const elements = [];
+        templateElementsList.querySelectorAll('.element-item').forEach(item => {
+            const element = {
+                type: item.dataset.type,
+                value: item.dataset.value ?? ''
+            };
+            if (item.dataset.headingLevel && parseInt(item.dataset.headingLevel, 10) > 0) {
+                element.level = parseInt(item.dataset.headingLevel, 10);
+            }
+            elements.push(element);
+        });
+        elementsJsonInput.value = JSON.stringify(elements);
+    }
 
         document.getElementById('add-heading').addEventListener('click', () => {
             const headingText = prompt('Введите текст заголовка:');
             if (headingText) {
-                const newItem = createTemplateElement('heading', headingText);
+                const levelInput = prompt('Введите уровень заголовка (2-4):', '2');
+                let headingLevel = parseInt(levelInput ?? '2', 10);
+                if (!Number.isInteger(headingLevel) || headingLevel < 2 || headingLevel > 5) {
+                    headingLevel = 2;
+                }
+                const newItem = createTemplateElement('heading', headingText, { headingLevel });
                 templateElementsList.appendChild(newItem);
                 updateElementsJson();
             }
@@ -195,6 +233,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
             }
         });
 
+        const addNewlineBtn = document.getElementById('add-newline');
+        if (addNewlineBtn) {
+            addNewlineBtn.addEventListener('click', () => {
+                const newItem = createTemplateElement('newline', '');
+                templateElementsList.appendChild(newItem);
+                updateElementsJson();
+            });
+        }
+
         templateElementsList.addEventListener('click', (event) => {
             const target = event.target;
             const item = target.closest('.element-item');
@@ -209,10 +256,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
                 let newValue = '';
                 if (item.dataset.type === 'heading') {
                     newValue = prompt('Редактировать заголовок:', item.dataset.value);
+                    if (newValue !== null) {
+                        const levelInput = prompt('Редактировать уровень заголовка (2-4):', item.dataset.headingLevel || '2');
+                        let headingLevel = parseInt(levelInput ?? '2', 10);
+                        if (!Number.isInteger(headingLevel) || headingLevel < 2 || headingLevel > 5) {
+                            headingLevel = 2;
+                        }
+                        item.dataset.headingLevel = headingLevel;
+                    }
                 } else if (item.dataset.type === 'image') {
                     newValue = prompt('Редактировать URL изображения:', item.dataset.value);
                 } else if (item.dataset.type === 'role') {
                     newValue = prompt('Редактировать ID роли:', item.dataset.value);
+                } else if (item.dataset.type === 'newline') {
+                    alert('Пустую строку редактировать не нужно. Вы можете удалить её и добавить заново.');
+                    newValue = null;
                 }
 
                 if (newValue !== null && newValue !== '') {
@@ -222,6 +280,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
                         if (item.dataset.type === 'role') {
                             // Здесь также нужно обновить отображаемое имя роли, если это возможно
                             textSpan.textContent = `ID: ${newValue}`; // Временно
+                        } else if (item.dataset.type === 'heading') {
+                            textSpan.textContent = newValue;
+                            const strong = item.querySelector('.content strong');
+                            if (strong && item.dataset.headingLevel) {
+                                strong.textContent = `Заголовок (уровень ${item.dataset.headingLevel}):`;
+                            }
                         } else {
                             textSpan.textContent = newValue;
                         }
@@ -231,19 +295,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
             }
         });
 
-        function createTemplateElement(type, value) {
+        function createTemplateElement(type, value, options = {}) {
             const div = document.createElement('div');
             div.className = 'element-item';
             div.dataset.type = type;
             div.dataset.value = value;
+            if (type === 'heading') {
+                div.dataset.headingLevel = options.headingLevel || 2;
+            } else {
+                div.dataset.headingLevel = '';
+            }
 
             let contentHtml = '';
             if (type === 'heading') {
-                contentHtml = `<strong>Заголовок:</strong> <span class="element-text">${value}</span>`;
+                const level = div.dataset.headingLevel || 2;
+                contentHtml = `<strong>Заголовок (уровень ${level}):</strong> <span class="element-text">${value}</span>`;
             } else if (type === 'image') {
                 contentHtml = `<strong>Изображение:</strong> <span class="element-text">${value}</span>`;
             } else if (type === 'role') {
                 contentHtml = `<strong>Роль:</strong> <span class="element-text">ID: ${value}</span>`; // Временно
+            } else if (type === 'newline') {
+                contentHtml = `<em>Пустая строка</em>`;
             }
 
             div.innerHTML = `
@@ -256,6 +328,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
             `;
             return div;
         }
+
+        updateElementsJson();
     </script>
 </body>
 </html>
