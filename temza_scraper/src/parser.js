@@ -1,6 +1,21 @@
 const cheerio = require('cheerio');
 
 const cleanText = (value) => (value || '').replace(/\s+/g, ' ').trim();
+
+const normalizeJoinedNames = (value) => {
+  if (!value) return '';
+  const patterns = [
+    /([а-яё])([А-ЯЁ][а-яё])/g,
+    /([a-z])([A-Z][a-z])/g,
+  ];
+
+  let normalized = value;
+  patterns.forEach((pattern) => {
+    normalized = normalized.replace(pattern, '$1, $2');
+  });
+
+  return cleanText(normalized.replace(/\s*,\s*/g, ', '));
+};
 const cleanMultiline = (value) =>
   (value || '')
     .replace(/\r/g, '')
@@ -20,6 +35,50 @@ const findHeadingSection = ($, title) => {
   return headingBox.parent();
 };
 
+const parseRoleCell = ($, cell) => {
+  const $cell = $(cell);
+  const textNodes = [];
+  $cell.contents().each((_, node) => {
+    if (node.type === 'text' && node.data) {
+      const value = cleanText(node.data);
+      if (value) textNodes.push(value);
+    }
+  });
+
+  const baseRole =
+    textNodes.join(' ').trim() ||
+    cleanText(
+      $cell
+        .clone()
+        .children()
+        .remove()
+        .end()
+        .text()
+    );
+
+  const notes = [];
+  $cell.find('div').each((_, el) => {
+    const text = cleanText(
+      $(el)
+        .clone()
+        .children()
+        .remove()
+        .end()
+        .text()
+    );
+    if (text) notes.push(text);
+  });
+
+  const normalizedNotes = [...new Set(notes)];
+  const isDebut = normalizedNotes.some((note) => /^ввод/i.test(note));
+
+  return {
+    role: baseRole,
+    notes: normalizedNotes,
+    isDebut,
+  };
+};
+
 const extractCast = ($) => {
   const section = findHeadingSection($, 'Состав');
   if (!section) return [];
@@ -31,10 +90,18 @@ const extractCast = ($) => {
   table.find('tbody tr').each((_, row) => {
     const cells = $(row).find('td');
     if (cells.length < 2) return;
-    const role = cleanText($(cells[0]).text());
-    const actor = cleanText($(cells[1]).text());
+    const { role, notes, isDebut } = parseRoleCell($, cells[0]);
+    const actorRaw = cleanText($(cells[1]).text());
+    const actor = normalizeJoinedNames(actorRaw);
     if (role && actor) {
-      rows.push({ role, actor });
+      const entry = { role, actor };
+      if (notes.length) {
+        entry.roleNotes = notes;
+      }
+      if (isDebut) {
+        entry.isDebut = true;
+      }
+      rows.push(entry);
     }
   });
   return rows;
@@ -51,7 +118,8 @@ const extractResponsibles = ($) => {
       .filter((_, node) => node.type === 'text')
       .text();
     const label = cleanText(labelNode).replace(/:$/, '');
-    const name = cleanText($(block).find('.MuiBox-root.css-rn6a4m').first().text());
+    const nameRaw = cleanText($(block).find('.MuiBox-root.css-rn6a4m').first().text());
+    const name = normalizeJoinedNames(nameRaw);
     if (label && name) {
       responsibles[label] = name;
     }
@@ -75,10 +143,12 @@ const extractDepartmentTasks = ($) => {
       detailsCell.find('.MuiBox-root.css-rn6a4m').length > 0
         ? detailsCell
             .find('.MuiBox-root.css-rn6a4m')
-            .map((__, el) => cleanText($(el).text()))
+            .map((__, el) => normalizeJoinedNames(cleanText($(el).text())))
             .get()
             .filter(Boolean)
-        : cleanMultiline(detailsCell.text());
+        : cleanMultiline(detailsCell.text())
+            .map((text) => normalizeJoinedNames(text))
+            .filter(Boolean);
 
     if (department || assignments.length) {
       rows.push({
@@ -106,12 +176,17 @@ const extractCalled = ($) => {
     $(cells[1])
       .find('.MuiBox-root.css-rn6a4m')
       .each((__, node) => {
-        const name = cleanText($(node).text());
+        const name = normalizeJoinedNames(cleanText($(node).text()));
         if (name) names.push(name);
       });
 
     if (!names.length) {
-      cleanMultiline($(cells[1]).text()).forEach((name) => names.push(name));
+      cleanMultiline($(cells[1]).text()).forEach((name) => {
+        const normalized = normalizeJoinedNames(name);
+        if (normalized) {
+          names.push(normalized);
+        }
+      });
     }
 
     if (names.length) {

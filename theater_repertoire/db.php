@@ -107,6 +107,14 @@ function getTemplateByPlayId(int $playId): ?array {
     return $stmt->fetch();
 }
 
+function getRolesByPlay(int $playId): array
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("SELECT role_id, role_name FROM roles WHERE play_id = ? ORDER BY sort_order, role_name");
+    $stmt->execute([$playId]);
+    return $stmt->fetchAll();
+}
+
 function getRoleById(int $roleId): ?array {
     $pdo = getDBConnection();
     $stmt = $pdo->prepare("SELECT * FROM roles WHERE role_id = ?");
@@ -642,6 +650,249 @@ function updateTemzaEventIgnore(int $temzaEventId, bool $ignore): bool
          WHERE id = ?
     ");
     return $stmt->execute([$ignore ? 1 : 0, $temzaEventId]);
+}
+
+function normalizeTemzaRole(string $value): string
+{
+    $value = trim($value);
+    if ($value === '') {
+        return '';
+    }
+
+    $value = mb_strtolower($value, 'UTF-8');
+    $value = str_replace(['ё', 'Ё'], ['е', 'е'], $value);
+    $value = preg_replace('/[«»"\'.,!?]/u', ' ', $value);
+    $value = preg_replace('/\s+/u', ' ', $value);
+    return trim($value);
+}
+
+function getTemzaPlaysList(): array
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->query("
+        SELECT DISTINCT p.id,
+                        p.site_title,
+                        p.full_name
+        FROM temza_cast_resolved tcr
+        JOIN plays p ON p.id = tcr.play_id
+        ORDER BY p.site_title
+    ");
+    return $stmt->fetchAll();
+}
+
+function getTemzaMonthsForPlay(int $playId): array
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("
+        SELECT DISTINCT te.month_label
+        FROM temza_cast_resolved tcr
+        JOIN temza_events te ON te.id = tcr.temza_event_id
+        WHERE tcr.play_id = ?
+          AND tcr.temza_role_normalized IS NOT NULL
+          AND tcr.temza_role_normalized <> ''
+        ORDER BY te.month_label DESC
+    ");
+    $stmt->execute([$playId]);
+    return $stmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
+}
+
+function getTemzaRoleSummary(int $playId, ?string $monthLabel = null): array
+{
+    $pdo = getDBConnection();
+    $sql = "
+        SELECT
+            tcr.temza_role_normalized,
+            MIN(tcr.temza_role_raw) AS sample_role,
+            MIN(tcr.temza_role_source) AS source_role,
+            COUNT(*) AS usage_count,
+            SUM(CASE WHEN tcr.status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+            MIN(te.event_date) AS first_date,
+            MIN(te.start_time) AS first_time,
+            GROUP_CONCAT(DISTINCT te.month_label ORDER BY te.month_label DESC SEPARATOR ', ') AS months,
+            SUBSTRING(GROUP_CONCAT(DISTINCT tcr.temza_actor ORDER BY tcr.temza_actor SEPARATOR ', '), 1, 120) AS actor_samples,
+            MAX(tcr.is_debut) AS has_debut,
+            trm.split_comma,
+            trm.target_role_id,
+            trm.target_group_name,
+            trm.temza_role AS mapping_raw_role,
+            r.role_name AS mapping_role_name,
+            trm.ignore_role,
+            CASE WHEN trm.target_role_id IS NOT NULL OR trm.target_group_name IS NOT NULL OR trm.ignore_role = 1 THEN 1 ELSE 0 END AS has_mapping
+        FROM temza_cast_resolved tcr
+        JOIN temza_events te ON te.id = tcr.temza_event_id
+        LEFT JOIN temza_role_map trm
+               ON trm.play_id = tcr.play_id
+              AND trm.temza_role_normalized = tcr.temza_role_normalized
+        LEFT JOIN roles r ON r.role_id = trm.target_role_id
+        WHERE tcr.play_id = ?
+    ";
+    $params = [$playId];
+    if ($monthLabel && $monthLabel !== 'all') {
+        $sql .= " AND te.month_label = ? ";
+        $params[] = $monthLabel;
+    }
+    $sql .= "
+        GROUP BY tcr.temza_role_normalized
+        ORDER BY has_mapping ASC, sample_role
+    ";
+
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->fetchAll();
+}
+
+function saveTemzaRoleMapping(
+    int $playId,
+    string $temzaRoleRaw,
+    string $temzaRoleNormalized,
+    bool $splitComma,
+    ?int $targetRoleId,
+    ?string $targetGroupName,
+    bool $ignoreRole
+): void {
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("
+        INSERT INTO temza_role_map (
+            play_id,
+            temza_role,
+            temza_role_normalized,
+            target_role_id,
+            target_group_name,
+            split_comma,
+            ignore_role
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+            temza_role = VALUES(temza_role),
+            target_role_id = VALUES(target_role_id),
+            target_group_name = VALUES(target_group_name),
+            split_comma = VALUES(split_comma),
+            ignore_role = VALUES(ignore_role),
+            updated_at = NOW()
+    ");
+    $stmt->execute([
+        $playId,
+        $temzaRoleRaw,
+        $temzaRoleNormalized,
+        $targetRoleId,
+        $targetGroupName,
+        $splitComma ? 1 : 0,
+        $ignoreRole ? 1 : 0,
+    ]);
+}
+
+function deleteTemzaRoleMapping(int $playId, string $temzaRoleNormalized): void
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("DELETE FROM temza_role_map WHERE play_id = ? AND temza_role_normalized = ?");
+    $stmt->execute([$playId, $temzaRoleNormalized]);
+}
+
+function reapplyTemzaRoleMapping(int $playId, string $temzaRoleNormalized): void
+{
+    $pdo = getDBConnection();
+    $mappingStmt = $pdo->prepare("
+        SELECT target_role_id, target_group_name, ignore_role
+        FROM temza_role_map
+        WHERE play_id = ? AND temza_role_normalized = ?
+    ");
+    $mappingStmt->execute([$playId, $temzaRoleNormalized]);
+    $mapping = $mappingStmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($mapping) {
+        if (!empty($mapping['ignore_role'])) {
+            $status = 'ignored';
+            $mappedRoleId = null;
+            $mappedGroup = null;
+        } else {
+            $status = ($mapping['target_role_id'] || $mapping['target_group_name']) ? 'mapped' : 'pending';
+            $mappedRoleId = $mapping['target_role_id'];
+            $mappedGroup = $mapping['target_group_name'];
+        }
+        $updateStmt = $pdo->prepare("
+            UPDATE temza_cast_resolved
+               SET mapped_role_id = ?,
+                   mapped_group = ?,
+                   status = ?
+             WHERE play_id = ?
+               AND temza_role_normalized = ?
+        ");
+        $updateStmt->execute([
+            $mappedRoleId,
+            $mappedGroup,
+            $status,
+            $playId,
+            $temzaRoleNormalized,
+        ]);
+    } else {
+        $updateStmt = $pdo->prepare("
+            UPDATE temza_cast_resolved
+               SET mapped_role_id = NULL,
+                   mapped_group = NULL,
+                   status = 'pending'
+             WHERE play_id = ?
+               AND temza_role_normalized = ?
+        ");
+        $updateStmt->execute([$playId, $temzaRoleNormalized]);
+    }
+}
+
+function getTemzaPlayOverview(): array
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->query("
+        SELECT
+            p.id,
+            p.site_title,
+            p.full_name,
+            COUNT(DISTINCT CASE WHEN tcr.temza_role_normalized IS NOT NULL AND tcr.temza_role_normalized <> '' THEN tcr.temza_role_normalized END) AS role_total,
+            COUNT(DISTINCT CASE WHEN tcr.status = 'pending' THEN tcr.temza_role_normalized END) AS role_pending
+        FROM temza_cast_resolved tcr
+        JOIN plays p ON p.id = tcr.play_id
+        GROUP BY p.id
+        ORDER BY p.site_title
+    ");
+    return $stmt->fetchAll();
+}
+
+function suggestTemzaRoleByActor(int $playId, string $roleNormalized): ?array
+{
+    if ($roleNormalized === '') {
+        return null;
+    }
+
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("
+        SELECT pra.role_id, r.role_name, COUNT(*) AS matches_count
+        FROM temza_cast_resolved tcr
+        JOIN temza_events te ON te.id = tcr.temza_event_id
+        JOIN events_raw er ON er.id = te.matched_event_id
+        JOIN performance_roles_artists pra ON pra.performance_id = er.id
+        LEFT JOIN artists a ON a.artist_id = pra.artist_id
+        LEFT JOIN roles r ON r.role_id = pra.role_id
+        WHERE tcr.play_id = ?
+          AND tcr.temza_role_normalized = ?
+          AND te.matched_event_id IS NOT NULL
+          AND (
+                (pra.custom_artist_name IS NOT NULL AND pra.custom_artist_name <> '' AND pra.custom_artist_name = tcr.temza_actor)
+             OR (
+                    a.artist_id IS NOT NULL
+                AND TRIM(CONCAT(COALESCE(a.first_name, ''), ' ', COALESCE(a.last_name, ''))) = tcr.temza_actor
+             )
+          )
+        GROUP BY pra.role_id, r.role_name
+        ORDER BY matches_count DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$playId, $roleNormalized]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$row || !$row['role_id']) {
+        return null;
+    }
+    return [
+        'role_id' => (int)$row['role_id'],
+        'role_name' => $row['role_name'] ?? '',
+        'reason' => 'По исполнителю',
+    ];
 }
 
 // === System Settings ===

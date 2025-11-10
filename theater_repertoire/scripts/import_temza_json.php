@@ -22,6 +22,24 @@ $updateSuggestionStmt = $pdo->prepare('
      WHERE id = ?
        AND is_confirmed = 0
 ');
+$fetchTitlePlayStmt = $pdo->prepare('SELECT play_id FROM temza_titles WHERE id = ?');
+$roleMapStmt = $pdo->prepare('SELECT temza_role, target_role_id, target_group_name, split_comma, ignore_role FROM temza_role_map WHERE play_id = ?');
+$deleteCastStmt = $pdo->prepare('DELETE FROM temza_cast_resolved WHERE temza_event_id = ?');
+$insertCastStmt = $pdo->prepare('
+    INSERT INTO temza_cast_resolved (
+        temza_event_id,
+        play_id,
+        temza_role_raw,
+        temza_role_source,
+        temza_role_normalized,
+        temza_actor,
+        temza_role_notes,
+        is_debut,
+        mapped_role_id,
+        mapped_group,
+        status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+');
 $insertEventStmt = $pdo->prepare('
     INSERT INTO temza_events (
         temza_title_id,
@@ -214,6 +232,151 @@ $stmt = $pdo->prepare($sql);
 }
 
 $playIndex = buildPlayIndex($pdo);
+
+function getPlayIdForTitle(PDOStatement $stmt, int $titleId): ?int
+{
+    $stmt->execute([$titleId]);
+    $playId = $stmt->fetchColumn();
+    return $playId ? (int)$playId : null;
+}
+
+function loadRoleMap(PDO $pdo, PDOStatement $stmt, ?int $playId): array
+{
+    if (!$playId) {
+        return [];
+    }
+    $stmt->execute([$playId]);
+    $map = [];
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $normalized = normalizeTitle($row['temza_role'] ?? '');
+        if ($normalized === '') {
+            continue;
+        }
+        $map[$normalized] = [
+            'target_role_id' => $row['target_role_id'] ? (int)$row['target_role_id'] : null,
+            'target_group_name' => $row['target_group_name'] ?? null,
+            'split_comma' => (int)($row['split_comma'] ?? 1) === 1,
+            'ignore_role' => (int)($row['ignore_role'] ?? 0) === 1,
+        ];
+    }
+    return $map;
+}
+
+function splitRoleTokens(string $role, bool $allowSplit = true): array
+{
+    if (!$allowSplit) {
+        return [trim($role)];
+    }
+
+    $result = [];
+    $buffer = '';
+    $depth = 0;
+    $chars = preg_split('//u', $role, -1, PREG_SPLIT_NO_EMPTY);
+    foreach ($chars as $ch) {
+        if ($ch === '(') {
+            $depth++;
+        } elseif ($ch === ')' && $depth > 0) {
+            $depth--;
+        }
+
+        if ($ch === ',' && $depth === 0) {
+            if (trim($buffer) !== '') {
+                $result[] = trim($buffer);
+            }
+            $buffer = '';
+            continue;
+        }
+
+        $buffer .= $ch;
+    }
+    if (trim($buffer) !== '') {
+        $result[] = trim($buffer);
+    }
+
+    return $result ?: [trim($role)];
+}
+
+function resolveCastEntries(
+    PDO $pdo,
+    PDOStatement $roleMapStmt,
+    PDOStatement $deleteCastStmt,
+    PDOStatement $insertCastStmt,
+    int $temzaEventId,
+    ?int $playId,
+    array $castRows
+): void {
+    $deleteCastStmt->execute([$temzaEventId]);
+
+    if (!$castRows) {
+        return;
+    }
+
+    $roleMap = loadRoleMap($pdo, $roleMapStmt, $playId);
+
+    $seenAssignments = [];
+
+    foreach ($castRows as $entry) {
+        $rawRole = trim($entry['role'] ?? '');
+        $actor = trim($entry['actor'] ?? '');
+        if ($rawRole === '' || $actor === '') {
+            continue;
+        }
+
+        $notesArray = isset($entry['roleNotes']) && is_array($entry['roleNotes']) ? $entry['roleNotes'] : [];
+        $notes = $notesArray ? implode('; ', $notesArray) : null;
+        $isDebut = !empty($entry['isDebut']) ? 1 : 0;
+
+        $normalizedFull = normalizeTitle($rawRole);
+        $splitAllowed = true;
+        if ($normalizedFull !== '' && isset($roleMap[$normalizedFull])) {
+            $splitAllowed = $roleMap[$normalizedFull]['split_comma'];
+        }
+
+        $tokens = splitRoleTokens($rawRole, $splitAllowed);
+
+        foreach ($tokens as $token) {
+            $normalizedToken = normalizeTitle($token);
+            $mapping = $normalizedToken !== '' ? ($roleMap[$normalizedToken] ?? null) : null;
+            $ignoreRole = $mapping ? !empty($mapping['ignore_role']) : false;
+            $mappedRoleId = (!$ignoreRole && $mapping && $mapping['target_role_id']) ? (int)$mapping['target_role_id'] : null;
+            $mappedGroup = (!$ignoreRole && $mapping) ? ($mapping['target_group_name'] ?? null) : null;
+            $status = $ignoreRole ? 'ignored' : (($mappedRoleId || $mappedGroup) ? 'mapped' : 'pending');
+
+            if ($ignoreRole) {
+                $mappedRoleId = null;
+                $mappedGroup = null;
+            }
+
+            $assignmentKey = null;
+            if ($mappedRoleId !== null) {
+                $assignmentKey = 'role:' . $mappedRoleId . '|actor:' . $actor;
+            } elseif ($mappedGroup !== null) {
+                $assignmentKey = 'group:' . $mappedGroup . '|actor:' . $actor;
+            }
+
+            if ($assignmentKey && isset($seenAssignments[$assignmentKey])) {
+                continue;
+            }
+            if ($assignmentKey) {
+                $seenAssignments[$assignmentKey] = true;
+            }
+
+            $insertCastStmt->execute([
+                $temzaEventId,
+                $playId,
+                $token,
+                $rawRole,
+                $normalizedToken ?: null,
+                $actor,
+                $notes,
+                $isDebut,
+                $mappedRoleId,
+                $mappedGroup,
+                $status,
+            ]);
+        }
+    }
+}
 $files = array_slice($argv, 1);
 
 foreach ($files as $filePath) {
@@ -299,6 +462,18 @@ foreach ($files as $filePath) {
             $rawJson,
             $scrapedAt,
         ]);
+
+        $temzaEventId = (int)$pdo->lastInsertId();
+        $playIdForTitle = getPlayIdForTitle($fetchTitlePlayStmt, $temzaTitleId);
+        resolveCastEntries(
+            $pdo,
+            $roleMapStmt,
+            $deleteCastStmt,
+            $insertCastStmt,
+            $temzaEventId,
+            $playIdForTitle,
+            $spectacle['cast'] ?? []
+        );
 
         $inserted++;
     }

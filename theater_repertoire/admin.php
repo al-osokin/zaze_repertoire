@@ -17,7 +17,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'wiki_link' => trim($_POST['wiki_link'] ?? ''),
             'hall' => trim($_POST['hall'] ?? ''),
             'special_mark' => trim($_POST['special_mark'] ?? ''),
-            'is_subscription' => $_POST['is_subscription'] ?? 0
+            'is_subscription' => $_POST['is_subscription'] ?? 0,
+            'is_concert_program' => $_POST['is_concert_program'] ?? 0,
         ];
 
         if (!empty($data['short_name']) && !empty($data['full_name']) && !empty($data['hall'])) {
