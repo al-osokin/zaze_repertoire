@@ -29,6 +29,7 @@ session_*
 uploads/
 files/
 storage/
+scraper/output
 
 # Бэкапы баз данных
 *.sql.bak
