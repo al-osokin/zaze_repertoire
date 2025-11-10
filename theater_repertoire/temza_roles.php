@@ -49,6 +49,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'save_role_mapping' && !$errors) {
         $temzaRoleRaw = trim($_POST['temza_role_raw'] ?? '');
         $temzaRoleNormalized = $_POST['temza_role_normalized'] ?? '';
+        $temzaRoleSource = trim($_POST['temza_role_source'] ?? '');
+        $temzaRoleSourceNormalized = $_POST['temza_role_source_normalized'] ?? '';
+        if ($temzaRoleSourceNormalized === '' && $temzaRoleSource !== '') {
+            $temzaRoleSourceNormalized = normalizeTemzaRole($temzaRoleSource);
+        }
         if ($temzaRoleRaw === '' && $temzaRoleNormalized === '') {
             $errors[] = 'Пустое название роли.';
         } else {
@@ -56,6 +61,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $temzaRoleNormalized = normalizeTemzaRole($temzaRoleRaw);
             }
             $splitComma = isset($_POST['split_comma']) ? (bool)$_POST['split_comma'] : false;
+            if (!$splitComma && $temzaRoleSource !== '') {
+                $temzaRoleRaw = $temzaRoleSource;
+                $temzaRoleNormalized = $temzaRoleSourceNormalized ?: normalizeTemzaRole($temzaRoleSource);
+            }
             $targetRoleId = isset($_POST['target_role_id']) && $_POST['target_role_id'] !== ''
                 ? (int)$_POST['target_role_id']
                 : null;
@@ -97,8 +106,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ($action === 'apply_role_suggestion' && !$errors) {
         $temzaRoleRaw = trim($_POST['temza_role_raw'] ?? '');
         $temzaRoleNormalized = $_POST['temza_role_normalized'] ?? '';
+        $temzaRoleSource = trim($_POST['temza_role_source'] ?? '');
+        $temzaRoleSourceNormalized = $_POST['temza_role_source_normalized'] ?? '';
+        if ($temzaRoleSourceNormalized === '' && $temzaRoleSource !== '') {
+            $temzaRoleSourceNormalized = normalizeTemzaRole($temzaRoleSource);
+        }
         $suggestedRoleId = isset($_POST['suggested_role_id']) ? (int)$_POST['suggested_role_id'] : 0;
         $splitComma = isset($_POST['split_comma']) ? (bool)$_POST['split_comma'] : false;
+        if (!$splitComma && $temzaRoleSource !== '') {
+            $temzaRoleRaw = $temzaRoleSource;
+            $temzaRoleNormalized = $temzaRoleSourceNormalized ?: normalizeTemzaRole($temzaRoleSource);
+        }
         $ignoreRole = isset($_POST['ignore_role']) ? (bool)$_POST['ignore_role'] : false;
         if ($suggestedRoleId > 0 && $temzaRoleNormalized !== '') {
             saveTemzaRoleMapping($playId, $temzaRoleRaw ?: $temzaRoleNormalized, $temzaRoleNormalized, $splitComma, $suggestedRoleId, null, $ignoreRole);
@@ -109,6 +127,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ];
         }
         redirectTemzaRoles($playId, $month);
+    } elseif ($action === 'rebuild_events_bulk' && !$errors) {
+        $monthFilter = $month === 'all' ? null : $month;
+        $events = getTemzaEventsForPlay($playId, $monthFilter);
+        if (!$events) {
+            $_SESSION['temza_roles_flash'] = [
+                'type' => 'error',
+                'message' => 'Нет показов Temza для пересборки по выбранным фильтрам.',
+            ];
+        } else {
+            $success = 0;
+            $failed = 0;
+            foreach ($events as $event) {
+                $result = rebuildTemzaEventCast((int)$event['id']);
+                if (!empty($result['success'])) {
+                    $success++;
+                } else {
+                    $failed++;
+                }
+            }
+            $_SESSION['temza_roles_flash'] = [
+                'type' => $failed ? 'error' : 'success',
+                'message' => $failed
+                    ? sprintf('Пересобрано %d показов, %d с ошибкой.', $success, $failed)
+                    : sprintf('Пересобрано %d показов Temza.', $success),
+            ];
+        }
+        redirectTemzaRoles($playId, $month);
     }
 }
 
@@ -116,6 +161,55 @@ $summaryRows = ($selectedPlayId && !$errors)
     ? getTemzaRoleSummary($selectedPlayId, $selectedMonth === 'all' ? null : $selectedMonth)
     : [];
 $rolesForPlay = $selectedPlayId ? getRolesByPlay($selectedPlayId) : [];
+$roleMapEntries = $selectedPlayId ? getTemzaRoleMapEntries($selectedPlayId) : [];
+
+if ($summaryRows) {
+    $roleNameById = [];
+    foreach ($rolesForPlay as $roleRow) {
+        $roleNameById[(int)$roleRow['role_id']] = $roleRow['role_name'] ?? '';
+    }
+    foreach ($summaryRows as &$row) {
+        $sourceNormalized = '';
+        if (!empty($row['source_role'])) {
+            $sourceNormalized = normalizeTemzaRole($row['source_role']);
+            $row['source_role_normalized'] = $sourceNormalized;
+        } else {
+            $row['source_role_normalized'] = '';
+        }
+        if (
+            $sourceNormalized
+            && isset($roleMapEntries[$sourceNormalized])
+        ) {
+            $mapEntry = $roleMapEntries[$sourceNormalized];
+            if ($row['split_comma'] === null) {
+                $row['split_comma'] = $mapEntry['split_comma'];
+            }
+            if (
+                empty($row['target_role_id'])
+                && empty($row['target_group_name'])
+                && empty($row['ignore_role'])
+            ) {
+                $row['target_role_id'] = $mapEntry['target_role_id'];
+                $row['target_group_name'] = $mapEntry['target_group_name'];
+                $row['ignore_role'] = $mapEntry['ignore_role'];
+                if (!empty($row['target_role_id']) && empty($row['mapping_role_name'])) {
+                    $roleId = (int)$row['target_role_id'];
+                    if (isset($roleNameById[$roleId])) {
+                        $row['mapping_role_name'] = $roleNameById[$roleId];
+                    }
+                }
+            }
+            if (
+                !empty($row['target_role_id'])
+                || !empty($row['target_group_name'])
+                || !empty($row['ignore_role'])
+            ) {
+                $row['has_mapping'] = 1;
+            }
+        }
+    }
+    unset($row);
+}
 
 function stripWikiMarkupLocal(string $value): string
 {
@@ -214,6 +308,14 @@ function formatPlayLabel(array $play): string
 .role-samples {
     font-size: 0.85rem;
     color: #6b7280;
+}
+.role-samples-caption {
+    font-weight: 600;
+    margin-right: 4px;
+}
+.role-samples--source {
+    font-size: 0.78rem;
+    color: #9ca3af;
 }
 .temza-form-inline {
             display: flex;
@@ -359,6 +461,18 @@ function formatPlayLabel(array $play): string
             <div class="temza-content">
                 <div class="section">
                     <h2>Роли Temza → карточка спектакля</h2>
+                    <form method="post" class="temza-form-inline" style="margin-bottom: 12px;">
+                        <input type="hidden" name="action" value="rebuild_events_bulk">
+                        <input type="hidden" name="play_id" value="<?php echo (int)$selectedPlayId; ?>">
+                        <input type="hidden" name="current_month" value="<?php echo htmlspecialchars($selectedMonth); ?>">
+                        <button type="submit" class="btn-secondary">
+                            Пересобрать составы
+                            <?php if ($selectedMonth !== 'all'): ?>
+                                за <?php echo htmlspecialchars($selectedMonth); ?>
+                            <?php endif; ?>
+                        </button>
+                        <span class="text-sm text-gray-600">Применяет текущие правила к всем показам выбранного спектакля.</span>
+                    </form>
             <?php if (!$summaryRows): ?>
                 <p>Нет данных для выбранных фильтров.</p>
             <?php else: ?>
@@ -376,19 +490,28 @@ function formatPlayLabel(array $play): string
                         <?php foreach ($summaryRows as $index => $row):
                             $formId = 'temza-role-form-' . $index;
                             $suggestion = getRoleSuggestion($row, $roleNameIndex, $selectedPlayId);
+                            $splitChecked = !isset($row['split_comma']) || (int)$row['split_comma'] === 1;
+                            $effectiveNormalizedValue = $row['temza_role_normalized'] ?? '';
+                            if (!$splitChecked && !empty($row['source_role_normalized'])) {
+                                $effectiveNormalizedValue = $row['source_role_normalized'];
+                            }
                         ?>
                             <tr class="<?php echo !empty($row['has_mapping']) ? 'temza-row-confirmed' : ''; ?>">
                                 <td>
                                     <strong><?php echo htmlspecialchars($row['sample_role'] ?? '—'); ?></strong>
                                     <div class="role-samples">
                                         <?php if (!empty($row['actor_samples'])): ?>
-                                            Примеры: <?php echo htmlspecialchars($row['actor_samples']); ?>
+                                            <span class="role-samples-caption">Примеры:</span>
+                                            <span><?php echo htmlspecialchars($row['actor_samples']); ?></span>
                                         <?php else: ?>
                                             &nbsp;
                                         <?php endif; ?>
                                     </div>
                                     <?php if (!empty($row['source_role'])): ?>
-                                        <div class="role-samples text-muted"><em>Оригинал Temza: <?php echo htmlspecialchars($row['source_role']); ?></em></div>
+                                        <div class="role-samples role-samples--source">
+                                            <span class="role-samples-caption">Temza</span>
+                                            <span><?php echo htmlspecialchars($row['source_role']); ?></span>
+                                        </div>
                                     <?php endif; ?>
                                     <?php if (!empty($row['months'])): ?>
                                         <div class="role-samples">Месяцы: <?php echo htmlspecialchars($row['months']); ?></div>
@@ -401,7 +524,7 @@ function formatPlayLabel(array $play): string
                                                        name="split_comma"
                                                        value="1"
                                                        form="<?php echo $formId; ?>"
-                                                    <?php echo (!isset($row['split_comma']) || $row['split_comma']) ? 'checked' : ''; ?>>
+                                                    <?php echo $splitChecked ? 'checked' : ''; ?>>
                                                 Делить по запятым
                                             </label>
                                         </div>
@@ -434,7 +557,9 @@ function formatPlayLabel(array $play): string
                                         <input type="hidden" name="play_id" value="<?php echo (int)$selectedPlayId; ?>">
                                         <input type="hidden" name="current_month" value="<?php echo htmlspecialchars($selectedMonth); ?>">
                                         <input type="hidden" name="temza_role_raw" value="<?php echo htmlspecialchars($row['sample_role'] ?? ''); ?>">
-                                        <input type="hidden" name="temza_role_normalized" value="<?php echo htmlspecialchars($row['temza_role_normalized'] ?? ''); ?>">
+                                        <input type="hidden" name="temza_role_source" value="<?php echo htmlspecialchars($row['source_role'] ?? ''); ?>">
+                                        <input type="hidden" name="temza_role_source_normalized" value="<?php echo htmlspecialchars(!empty($row['source_role']) ? normalizeTemzaRole($row['source_role']) : ''); ?>">
+                                        <input type="hidden" name="temza_role_normalized" value="<?php echo htmlspecialchars($effectiveNormalizedValue); ?>">
                                         <input type="hidden" name="suggested_role_id" value="<?php echo $suggestion['role_id'] ?? ''; ?>">
                                         <input type="hidden" name="action" value="save_role_mapping">
                                         <label>

@@ -39,6 +39,7 @@ function checkPlayExists($shortName, $excludeId = null) {
 function savePlay($data) {
     $pdo = getDBConnection();
     $isSubscription = isset($data['is_subscription']) ? (int)$data['is_subscription'] : 0;
+    $isConcertProgram = isset($data['is_concert_program']) ? (int)$data['is_concert_program'] : 0;
     $specialMark = $data['special_mark'] ?? '';
     $siteTitle = $data['site_title'] ?? null;
     if ($siteTitle !== null && $siteTitle === '') {
@@ -52,8 +53,8 @@ function savePlay($data) {
         }
 
         try {
-            $stmt = $pdo->prepare("UPDATE plays SET short_name = ?, site_title = ?, full_name = ?, wiki_link = ?, hall = ?, special_mark = ?, is_subscription = ? WHERE id = ?");
-            $stmt->execute([$data['short_name'], $siteTitle, $data['full_name'], $data['wiki_link'], $data['hall'], $specialMark, $isSubscription, $data['id']]);
+            $stmt = $pdo->prepare("UPDATE plays SET short_name = ?, site_title = ?, full_name = ?, wiki_link = ?, hall = ?, special_mark = ?, is_subscription = ?, is_concert_program = ? WHERE id = ?");
+            $stmt->execute([$data['short_name'], $siteTitle, $data['full_name'], $data['wiki_link'], $data['hall'], $specialMark, $isSubscription, $isConcertProgram, $data['id']]);
             return ['success' => true, 'message' => 'Спектакль обновлён'];
         } catch (PDOException $e) {
             return ['success' => false, 'message' => 'Ошибка при обновлении спектакля: ' . $e->getMessage()];
@@ -65,8 +66,8 @@ function savePlay($data) {
         }
 
         try {
-            $stmt = $pdo->prepare("INSERT INTO plays (short_name, site_title, full_name, wiki_link, hall, special_mark, is_subscription) VALUES (?, ?, ?, ?, ?, ?, ?)");
-            $stmt->execute([$data['short_name'], $siteTitle, $data['full_name'], $data['wiki_link'], $data['hall'], $specialMark, $isSubscription]);
+            $stmt = $pdo->prepare("INSERT INTO plays (short_name, site_title, full_name, wiki_link, hall, special_mark, is_subscription, is_concert_program) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt->execute([$data['short_name'], $siteTitle, $data['full_name'], $data['wiki_link'], $data['hall'], $specialMark, $isSubscription, $isConcertProgram]);
             return ['success' => true, 'message' => 'Спектакль добавлен'];
         } catch (PDOException $e) {
             return ['success' => false, 'message' => 'Ошибка при добавлении спектакля: ' . $e->getMessage()];
@@ -88,10 +89,36 @@ function getTemplateElementsForPlay(int $playId): array {
     return $stmt->fetchAll();
 }
 
-function saveTemplateElement(int $playId, string $elementType, string $elementValue, int $sortOrder, ?int $headingLevel = null): void {
+function saveTemplateElement(
+    int $playId,
+    string $elementType,
+    string $elementValue,
+    int $sortOrder,
+    ?int $headingLevel = null,
+    bool $usePreviousCast = false,
+    ?string $specialGroup = null
+): void {
     $pdo = getDBConnection();
-    $stmt = $pdo->prepare("INSERT INTO template_elements (play_id, element_type, element_value, sort_order, heading_level) VALUES (?, ?, ?, ?, ?)");
-    $stmt->execute([$playId, $elementType, $elementValue, $sortOrder, $headingLevel]);
+    $stmt = $pdo->prepare("
+        INSERT INTO template_elements (
+            play_id,
+            element_type,
+            element_value,
+            use_previous_cast,
+            special_group,
+            sort_order,
+            heading_level
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ");
+    $stmt->execute([
+        $playId,
+        $elementType,
+        $elementValue,
+        $usePreviousCast ? 1 : 0,
+        $specialGroup ?: null,
+        $sortOrder,
+        $headingLevel,
+    ]);
 }
 
 function deleteTemplateElementsByPlayId(int $playId): void {
@@ -113,6 +140,50 @@ function getRolesByPlay(int $playId): array
     $stmt = $pdo->prepare("SELECT role_id, role_name FROM roles WHERE play_id = ? ORDER BY sort_order, role_name");
     $stmt->execute([$playId]);
     return $stmt->fetchAll();
+}
+
+function getLastCastForPlay(int $playId): array
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("
+        SELECT
+            prlc.role_id,
+            prlc.artist_id,
+            prlc.custom_artist_name,
+            prlc.is_first_time,
+            a.first_name,
+            a.last_name
+        FROM play_role_last_cast prlc
+        LEFT JOIN artists a ON a.artist_id = prlc.artist_id
+        WHERE prlc.play_id = ?
+        ORDER BY prlc.role_id, prlc.sort_order_in_role
+    ");
+    $stmt->execute([$playId]);
+
+    $result = [];
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $roleId = (int)$row['role_id'];
+        $name = trim(((string)($row['first_name'] ?? '')) . ' ' . ((string)($row['last_name'] ?? '')));
+        if ($name === '') {
+            $name = trim((string)($row['custom_artist_name'] ?? ''));
+        }
+        if ($name === '') {
+            continue;
+        }
+        if (!empty($row['is_first_time'])) {
+            $name .= " (''впервые в роли'')";
+        }
+        if (!isset($result[$roleId])) {
+            $result[$roleId] = [];
+        }
+        $result[$roleId][] = $name;
+    }
+
+    foreach ($result as $roleId => $names) {
+        $result[$roleId] = array_values(array_unique($names));
+    }
+
+    return $result;
 }
 
 function getRoleById(int $roleId): ?array {
@@ -563,6 +634,7 @@ function getTemzaEventsForMonth(string $monthLabel, bool $onlyUnmatched = false)
         LEFT JOIN events_raw er ON er.id = te.matched_event_id
         LEFT JOIN plays ep ON ep.id = er.play_id
         WHERE te.month_label = ?
+          AND COALESCE(te.ignore_in_schedule, 0) = 0
     ";
     if ($onlyUnmatched) {
         $sql .= " AND te.matched_event_id IS NULL AND te.ignore_in_schedule = 0";
@@ -605,11 +677,61 @@ function getEventsRawOptionsForMonth(string $monthLabel): array
     return $stmt->fetchAll();
 }
 
+function getTemzaEventsForReview(string $monthLabel): array
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("
+        SELECT
+            te.*,
+            tt.play_id,
+            tt.temza_title AS original_temza_title,
+            p.site_title AS play_site_title,
+            p.full_name AS play_full_name,
+            p.is_concert_program,
+            er.ticket_code,
+            te.responsibles_json,
+            te.called_json,
+            u.username AS published_by_username
+        FROM temza_events te
+        LEFT JOIN temza_titles tt ON tt.id = te.temza_title_id
+        LEFT JOIN plays p ON p.id = tt.play_id
+        LEFT JOIN events_raw er ON er.id = te.matched_event_id
+        LEFT JOIN users u ON u.id = te.published_by
+        WHERE te.month_label = ?
+        ORDER BY
+            te.event_date IS NULL,
+            te.event_date,
+            te.start_time,
+            te.id
+    ");
+    $stmt->execute([$monthLabel]);
+    return $stmt->fetchAll();
+}
+
 function updateTemzaEventMatch(int $temzaEventId, ?int $eventId): bool
 {
     $pdo = getDBConnection();
     $stmt = $pdo->prepare("UPDATE temza_events SET matched_event_id = ?, updated_at = NOW() WHERE id = ?");
     return $stmt->execute([$eventId, $temzaEventId]);
+}
+
+function publishTemzaEvent(int $temzaEventId, int $userId): bool
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("
+        UPDATE temza_events
+           SET published_at = NOW(),
+               published_by = ?
+         WHERE id = ?
+    ");
+    return $stmt->execute([$userId, $temzaEventId]);
+}
+
+function resetTemzaEventPublication(int $temzaEventId): bool
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("UPDATE temza_events SET published_at = NULL, published_by = NULL WHERE id = ?");
+    return $stmt->execute([$temzaEventId]);
 }
 
 function getTemzaTitleStatsForMonth(string $monthLabel): array
@@ -664,6 +786,286 @@ function normalizeTemzaRole(string $value): string
     $value = preg_replace('/[«»"\'.,!?]/u', ' ', $value);
     $value = preg_replace('/\s+/u', ' ', $value);
     return trim($value);
+}
+
+function normalizeTemzaToken(string $value): string
+{
+    $value = mb_strtolower($value, 'UTF-8');
+    $value = str_replace(['ё', 'Ё'], ['е', 'е'], $value);
+    $value = preg_replace('/[«»"\'.!?()\[\]{}]/u', ' ', $value);
+    $value = preg_replace('/\s+/u', ' ', $value);
+    return trim($value);
+}
+
+function loadRoleMap(PDO $pdo, PDOStatement $stmt, ?int $playId): array
+{
+    if (!$playId) {
+        return [];
+    }
+    $stmt->execute([$playId]);
+    $map = [];
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $normalized = normalizeTemzaToken($row['temza_role'] ?? '');
+        if ($normalized === '') {
+            continue;
+        }
+        $map[$normalized] = [
+            'target_role_id' => $row['target_role_id'] ? (int)$row['target_role_id'] : null,
+            'target_group_name' => $row['target_group_name'] ?? null,
+            'split_comma' => (int)($row['split_comma'] ?? 1) === 1,
+            'ignore_role' => (int)($row['ignore_role'] ?? 0) === 1,
+        ];
+    }
+    return $map;
+}
+
+function splitRoleTokens(string $role, bool $allowSplit = true): array
+{
+    if (!$allowSplit) {
+        return [trim($role)];
+    }
+
+    $result = [];
+    $buffer = '';
+    $depth = 0;
+    $chars = preg_split('//u', $role, -1, PREG_SPLIT_NO_EMPTY);
+    foreach ($chars as $ch) {
+        if ($ch === '(') {
+            $depth++;
+        } elseif ($ch === ')' && $depth > 0) {
+            $depth--;
+        }
+
+        if ($ch === ',' && $depth === 0) {
+            if (trim($buffer) !== '') {
+                $result[] = trim($buffer);
+            }
+            $buffer = '';
+            continue;
+        }
+
+        $buffer .= $ch;
+    }
+    if (trim($buffer) !== '') {
+        $result[] = trim($buffer);
+    }
+
+    return $result ?: [trim($role)];
+}
+
+function resolveCastEntries(
+    PDO $pdo,
+    PDOStatement $roleMapStmt,
+    PDOStatement $deleteCastStmt,
+    PDOStatement $insertCastStmt,
+    int $temzaEventId,
+    ?int $playId,
+    array $castRows
+): void {
+    $deleteCastStmt->execute([$temzaEventId]);
+
+    if (!$castRows) {
+        return;
+    }
+
+    $roleMap = loadRoleMap($pdo, $roleMapStmt, $playId);
+
+    $seenAssignments = [];
+
+    foreach ($castRows as $entry) {
+        $rawRole = trim($entry['role'] ?? '');
+        $actor = trim($entry['actor'] ?? '');
+        if ($rawRole === '' || $actor === '') {
+            continue;
+        }
+
+        $notesArray = isset($entry['roleNotes']) && is_array($entry['roleNotes']) ? $entry['roleNotes'] : [];
+        $notes = $notesArray ? implode('; ', $notesArray) : null;
+        $isDebut = !empty($entry['isDebut']) ? 1 : 0;
+
+        $normalizedFull = normalizeTemzaToken($rawRole);
+        $splitAllowed = true;
+        if ($normalizedFull !== '' && isset($roleMap[$normalizedFull])) {
+            $splitAllowed = $roleMap[$normalizedFull]['split_comma'];
+        }
+
+        $tokens = splitRoleTokens($rawRole, $splitAllowed);
+
+        foreach ($tokens as $token) {
+            $normalizedToken = normalizeTemzaToken($token);
+            $mapping = $normalizedToken !== '' ? ($roleMap[$normalizedToken] ?? null) : null;
+            $ignoreRole = $mapping ? !empty($mapping['ignore_role']) : false;
+            $mappedRoleId = (!$ignoreRole && $mapping && $mapping['target_role_id']) ? (int)$mapping['target_role_id'] : null;
+            $mappedGroup = (!$ignoreRole && $mapping) ? ($mapping['target_group_name'] ?? null) : null;
+            $status = $ignoreRole ? 'ignored' : (($mappedRoleId || $mappedGroup) ? 'mapped' : 'pending');
+
+            if ($ignoreRole) {
+                $mappedRoleId = null;
+                $mappedGroup = null;
+            }
+
+            $assignmentKey = null;
+            if ($mappedRoleId !== null) {
+                $assignmentKey = 'role:' . $mappedRoleId . '|actor:' . $actor;
+            } elseif ($mappedGroup !== null) {
+                $assignmentKey = 'group:' . $mappedGroup . '|actor:' . $actor;
+            }
+
+            if ($assignmentKey && isset($seenAssignments[$assignmentKey])) {
+                continue;
+            }
+            if ($assignmentKey) {
+                $seenAssignments[$assignmentKey] = true;
+            }
+
+            $insertCastStmt->execute([
+                $temzaEventId,
+                $playId,
+                $token,
+                $rawRole,
+                $normalizedToken ?: null,
+                $actor,
+                $notes,
+                $isDebut,
+                $mappedRoleId,
+                $mappedGroup,
+                $status,
+            ]);
+        }
+    }
+}
+
+function rebuildTemzaEventCast(int $temzaEventId): array
+{
+    $pdo = getDBConnection();
+    $eventStmt = $pdo->prepare("
+        SELECT
+            te.*,
+            tt.play_id,
+            tt.temza_title
+        FROM temza_events te
+        LEFT JOIN temza_titles tt ON tt.id = te.temza_title_id
+        WHERE te.id = ?
+    ");
+    $eventStmt->execute([$temzaEventId]);
+    $event = $eventStmt->fetch(PDO::FETCH_ASSOC);
+    if (!$event) {
+        return [
+            'success' => false,
+            'message' => 'Не найдено событие Temza.',
+        ];
+    }
+
+    $castRows = [];
+    if (!empty($event['cast_json'])) {
+        $decoded = json_decode($event['cast_json'], true);
+        if (is_array($decoded)) {
+            $castRows = $decoded;
+        }
+    }
+
+    if (!$castRows) {
+        return [
+            'success' => false,
+            'message' => 'Для этого события нет сохранённого состава.',
+        ];
+    }
+
+    $roleMapStmt = $pdo->prepare('SELECT temza_role, target_role_id, target_group_name, split_comma, ignore_role FROM temza_role_map WHERE play_id = ?');
+    $deleteCastStmt = $pdo->prepare('DELETE FROM temza_cast_resolved WHERE temza_event_id = ?');
+    $insertCastStmt = $pdo->prepare('
+        INSERT INTO temza_cast_resolved (
+            temza_event_id,
+            play_id,
+            temza_role_raw,
+            temza_role_source,
+            temza_role_normalized,
+            temza_actor,
+            temza_role_notes,
+            is_debut,
+            mapped_role_id,
+            mapped_group,
+            status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ');
+
+    resolveCastEntries(
+        $pdo,
+        $roleMapStmt,
+        $deleteCastStmt,
+        $insertCastStmt,
+        $temzaEventId,
+        $event['play_id'] ? (int)$event['play_id'] : null,
+        $castRows
+    );
+
+    $statsStmt = $pdo->prepare("
+        SELECT
+            COUNT(*) AS total,
+            SUM(status = 'pending') AS pending,
+            SUM(status = 'mapped') AS mapped,
+            SUM(status = 'ignored') AS ignored
+        FROM temza_cast_resolved
+        WHERE temza_event_id = ?
+    ");
+    $statsStmt->execute([$temzaEventId]);
+    $stats = $statsStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+    return [
+        'success' => true,
+        'event' => [
+            'id' => (int)$event['id'],
+            'temza_title' => $event['temza_title'] ?? null,
+            'event_date' => $event['event_date'] ?? null,
+            'start_time' => $event['start_time'] ?? null,
+            'month_label' => $event['month_label'] ?? null,
+        ],
+        'stats' => [
+            'total' => (int)($stats['total'] ?? 0),
+            'pending' => (int)($stats['pending'] ?? 0),
+            'mapped' => (int)($stats['mapped'] ?? 0),
+            'ignored' => (int)($stats['ignored'] ?? 0),
+        ],
+    ];
+}
+
+function getTemzaEventsForPlay(int $playId, ?string $monthLabel = null): array
+{
+    $pdo = getDBConnection();
+    $sql = "
+        SELECT
+            te.id,
+            te.event_date,
+            te.start_time,
+            te.month_label,
+            te.preview_title,
+            te.date_label,
+            te.time_label,
+            te.hall,
+            te.status,
+            te.scraped_at,
+            COUNT(tcr.id) AS cast_total,
+            SUM(tcr.status = 'pending') AS pending_count,
+            SUM(tcr.status = 'mapped') AS mapped_count,
+            SUM(tcr.status = 'ignored') AS ignored_count
+        FROM temza_events te
+        JOIN temza_titles tt ON tt.id = te.temza_title_id
+        LEFT JOIN temza_cast_resolved tcr ON tcr.temza_event_id = te.id
+        WHERE tt.play_id = ?
+    ";
+    $params = [$playId];
+    if ($monthLabel && $monthLabel !== 'all') {
+        $sql .= " AND te.month_label = ? ";
+        $params[] = $monthLabel;
+    }
+    $sql .= "
+        GROUP BY te.id
+        ORDER BY te.event_date IS NULL, te.event_date, te.start_time, te.id
+    ";
+
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 }
 
 function getTemzaPlaysList(): array
@@ -739,6 +1141,36 @@ function getTemzaRoleSummary(int $playId, ?string $monthLabel = null): array
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
     return $stmt->fetchAll();
+}
+
+function getTemzaRoleMapEntries(int $playId): array
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("
+        SELECT
+            temza_role,
+            temza_role_normalized,
+            target_role_id,
+            target_group_name,
+            split_comma,
+            ignore_role
+        FROM temza_role_map
+        WHERE play_id = ?
+    ");
+    $stmt->execute([$playId]);
+
+    $map = [];
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $normalized = $row['temza_role_normalized'] ?? '';
+        if ($normalized === '' && !empty($row['temza_role'])) {
+            $normalized = normalizeTemzaRole($row['temza_role']);
+        }
+        if ($normalized === '') {
+            continue;
+        }
+        $map[$normalized] = $row;
+    }
+    return $map;
 }
 
 function saveTemzaRoleMapping(
@@ -893,6 +1325,773 @@ function suggestTemzaRoleByActor(int $playId, string $roleNormalized): ?array
         'role_name' => $row['role_name'] ?? '',
         'reason' => 'По исполнителю',
     ];
+}
+
+function getTemzaCastForEvent(int $temzaEventId): array
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("
+        SELECT tcr.*, r.sort_order
+        FROM temza_cast_resolved tcr
+        LEFT JOIN roles r ON r.role_id = tcr.mapped_role_id
+        WHERE tcr.temza_event_id = ?
+        ORDER BY
+            (r.sort_order IS NULL),
+            r.sort_order,
+            tcr.mapped_group IS NULL,
+            tcr.mapped_group,
+            tcr.id
+    ");
+    $stmt->execute([$temzaEventId]);
+    return $stmt->fetchAll();
+}
+
+function buildTemzaEventCardText(int $temzaEventId, ?int $playId, ?string $ticketCode = null, array $extra = []): array
+{
+    $result = [
+        'text' => null,
+        'warnings' => [],
+        'has_data' => false,
+    ];
+
+    if (!$playId) {
+        $result['warnings'][] = 'Событие не сопоставлено со спектаклем.';
+        return $result;
+    }
+
+    $templateElements = getTemplateElementsForPlay($playId);
+    $roles = getRolesByPlay($playId);
+    $roleIndex = [];
+    $normalizedRoleIndex = [];
+    foreach ($roles as $role) {
+        $roleId = (int)$role['role_id'];
+        $roleName = $role['role_name'] ?? '';
+        $roleIndex[$roleId] = $roleName;
+        $normalized = normalizeRoleLabelForTemza($roleName);
+        if ($normalized !== '') {
+            $normalizedRoleIndex[$normalized] = $roleId;
+        }
+    }
+
+    if (!$templateElements) {
+        $result['warnings'][] = 'Для спектакля не задан шаблон карточки.';
+    }
+
+    $castRows = getTemzaCastForEvent($temzaEventId);
+    if (!$castRows) {
+        $result['warnings'][] = 'Нет записей о составе для этого спектакля.';
+        return $result;
+    }
+
+    $castByRole = [];
+    $groups = [];
+    $extraGroups = [];
+    $pendingEntries = [];
+
+    foreach ($castRows as $row) {
+        $status = $row['status'] ?? 'pending';
+        if ($status === 'ignored') {
+            continue;
+        }
+
+        $actor = trim((string)($row['temza_actor'] ?? ''));
+        if ($actor === '') {
+            continue;
+        }
+
+        if ($status === 'pending' || (empty($row['mapped_role_id']) && empty($row['mapped_group']))) {
+            $pendingEntries[] = [
+                'role' => $row['temza_role_source'] ?? $row['temza_role_raw'] ?? '',
+                'actor' => $row['temza_actor'] ?? '',
+            ];
+        }
+
+        $formattedEntries = splitActorTokens($actor, !empty($row['is_debut']));
+        if (!$formattedEntries) {
+            continue;
+        }
+
+        if (!empty($row['mapped_role_id'])) {
+            $roleId = (int)$row['mapped_role_id'];
+            foreach ($formattedEntries as $entry) {
+                $castByRole[$roleId][] = $entry;
+            }
+        } elseif (!empty($row['mapped_group'])) {
+            $groupName = trim((string)$row['mapped_group']);
+            if ($groupName !== '') {
+                foreach ($formattedEntries as $entry) {
+                    $groups[$groupName][] = $entry;
+                }
+            }
+        }
+    }
+
+    $roleSpecialGroupById = [];
+    $specialGroupRoleMap = [];
+    if ($templateElements) {
+        foreach ($templateElements as $element) {
+            if (($element['element_type'] ?? '') === 'role' && !empty($element['special_group'])) {
+                $roleId = (int)($element['element_value'] ?? 0);
+                if ($roleId) {
+                    $roleSpecialGroupById[$roleId] = $element['special_group'];
+                    $specialGroupRoleMap[$element['special_group']][] = $roleId;
+                }
+            }
+        }
+    }
+
+    if ($templateElements) {
+        $previousCastCache = null;
+        foreach ($templateElements as $element) {
+            if (($element['element_type'] ?? '') === 'role' && !empty($element['use_previous_cast'])) {
+                $roleId = (int)($element['element_value'] ?? 0);
+                if (!$roleId) {
+                    continue;
+                }
+                if (isset($roleSpecialGroupById[$roleId])) {
+                    continue;
+                }
+                if (!empty($castByRole[$roleId])) {
+                    continue;
+                }
+                $roleName = $roleIndex[$roleId] ?? '';
+                $hasGroupMatch = false;
+                if ($roleName !== '' && $groups) {
+                    $normalizedRole = normalizeRoleLabelForTemza($roleName);
+                    if ($normalizedRole !== '') {
+                        foreach ($groups as $groupName => $_) {
+                            if ($normalizedRole === normalizeRoleLabelForTemza($groupName)) {
+                                $hasGroupMatch = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if ($hasGroupMatch) {
+                    continue;
+                }
+                if ($previousCastCache === null) {
+                    $previousCastCache = getLastCastForPlay($playId);
+                }
+                if (!empty($previousCastCache[$roleId])) {
+                    $castByRole[$roleId] = array_merge($previousCastCache[$roleId], $castByRole[$roleId] ?? []);
+                }
+            }
+        }
+    }
+
+    foreach ($castByRole as $roleId => $entries) {
+        $castByRole[$roleId] = array_values(array_unique($entries));
+    }
+    foreach ($groups as $groupName => $entries) {
+        $groups[$groupName] = array_values(array_unique($entries));
+    }
+
+    $responsiblesData = decodeTemzaJsonAssoc($extra['responsibles_json'] ?? null);
+    $calledData = decodeTemzaJsonAssoc($extra['called_json'] ?? null);
+
+    $conductorNames = extractNamesByPattern($responsiblesData, '/дириж/iu');
+    $concertmasterPattern = '/(концертмейстер|пианист|клавесин|клавесинист|клавир|джаз[-\\s]?бо?-?браун|джаз[-\\s]?браун)/iu';
+    $responsibleConcertmasters = extractNamesByPattern($responsiblesData, $concertmasterPattern);
+    $calledConcertmasters = extractNamesByPattern($calledData, $concertmasterPattern);
+    $manualAssignments = [
+        'conductor' => array_values(array_unique($conductorNames)),
+        'concertmaster' => array_values(array_unique(array_merge($responsibleConcertmasters, $calledConcertmasters))),
+    ];
+    if ($specialGroupRoleMap) {
+        foreach ($specialGroupRoleMap as $groupKey => $roleIds) {
+            if (empty($manualAssignments[$groupKey])) {
+                continue;
+            }
+            foreach ($roleIds as $roleId) {
+                if ($roleId && empty($castByRole[$roleId])) {
+                    $castByRole[$roleId] = $manualAssignments[$groupKey];
+                }
+            }
+            $manualAssignments[$groupKey] = [];
+        }
+    }
+    if (!empty($manualAssignments['conductor'])) {
+        appendManualAssignmentsToCast($castByRole, $groups, $extraGroups, $normalizedRoleIndex, $roleIndex, 'дирижер', $manualAssignments['conductor'], 'Дирижёр', true);
+    }
+    if (!empty($manualAssignments['concertmaster'])) {
+        appendManualAssignmentsToCast($castByRole, $groups, $extraGroups, $normalizedRoleIndex, $roleIndex, 'концертмейстер', $manualAssignments['concertmaster'], 'Концертмейстер', false);
+    }
+
+    $lines = [];
+    $usedRoleIds = [];
+    $hasTicketPlaceholder = false;
+
+    $groupNormalizedIndex = [];
+    foreach ($groups as $groupName => $artists) {
+        $norm = normalizeRoleLabelForTemza($groupName);
+        if ($norm !== '') {
+            $groupNormalizedIndex[$norm] = $groupName;
+        }
+    }
+
+    if ($templateElements) {
+        foreach ($templateElements as $element) {
+            $type = $element['element_type'];
+            $value = $element['element_value'];
+            if ($type === 'heading') {
+                $level = max(2, (int)($element['heading_level'] ?? 3));
+                $headingText = trim(trim((string)$value), '= ');
+                if ($headingText !== '') {
+                    $lines[] = str_repeat('=', $level) . $headingText . str_repeat('=', $level);
+                }
+            } elseif ($type === 'image' && $value !== '') {
+                $lines[] = $value;
+            } elseif ($type === 'newline') {
+                $lines[] = '';
+            } elseif ($type === 'role') {
+                $roleId = (int)$value;
+                if (!isset($roleIndex[$roleId])) {
+                    continue;
+                }
+                $roleName = $roleIndex[$roleId];
+                if ($roleName === '') {
+                    continue;
+                }
+                $usedRoleIds[$roleId] = true;
+                $artists = $castByRole[$roleId] ?? [];
+                if (!$artists) {
+                    $norm = normalizeRoleLabelForTemza($roleName);
+                    if ($norm !== '' && isset($groupNormalizedIndex[$norm])) {
+                        $groupKey = $groupNormalizedIndex[$norm];
+                        $artists = $groups[$groupKey] ?? [];
+                        if ($artists) {
+                            unset($groups[$groupKey], $groupNormalizedIndex[$norm]);
+                            $lines[] = $roleName . ': ' . implode(', ', $artists);
+                            continue;
+                        }
+                    }
+                }
+                $line = $roleName . ' — ';
+                if ($artists) {
+                    $line .= implode(', ', $artists);
+                } else {
+                    $line .= "''СОСТАВ УТОЧНЯЕТСЯ''";
+                }
+                $lines[] = $line;
+            } elseif ($type === 'ticket_button') {
+                $customLink = trim((string)$value);
+                $ticketLine = '';
+                if ($customLink !== '') {
+                    $ticketLine = $customLink;
+                } elseif ($ticketCode) {
+                    $ticketLine = "'''[http://www.zazerkal.spb.ru/tickets/{$ticketCode}.htm|КУПИТЬ БИЛЕТ]'''";
+                }
+                if ($ticketLine !== '') {
+                    if ($lines && end($lines) !== '') {
+                        $lines[] = '';
+                    }
+                    $lines[] = $ticketLine;
+                    $hasTicketPlaceholder = true;
+                }
+            }
+        }
+    }
+
+    $remainingRoles = array_diff_key($castByRole, $usedRoleIds);
+    if ($remainingRoles) {
+        if ($lines && end($lines) !== '') {
+            $lines[] = '';
+        }
+        foreach ($remainingRoles as $roleId => $artists) {
+            $roleName = $roleIndex[$roleId] ?? '';
+            if ($roleName === '') {
+                continue;
+            }
+            if (empty($artists)) {
+                $norm = normalizeRoleLabelForTemza($roleName);
+                if ($norm !== '' && isset($groupNormalizedIndex[$norm])) {
+                    $groupKey = $groupNormalizedIndex[$norm];
+                    $groupArtists = $groups[$groupKey] ?? [];
+                    if ($groupArtists) {
+                        unset($groups[$groupKey], $groupNormalizedIndex[$norm]);
+                        $lines[] = $roleName . ': ' . implode(', ', $groupArtists);
+                    }
+                }
+                continue;
+            }
+            $lines[] = $roleName . ' — ' . implode(', ', $artists);
+        }
+    }
+
+    $groupsToRender = [];
+    if (!empty($extraGroups)) {
+        foreach ($extraGroups as $groupName => $shouldShow) {
+            if (empty($shouldShow) || empty($groups[$groupName])) {
+                continue;
+            }
+            $groupsToRender[$groupName] = $groups[$groupName];
+        }
+    }
+
+    if ($groupsToRender) {
+        if ($lines && end($lines) !== '') {
+            $lines[] = '';
+        }
+        foreach ($groupsToRender as $groupName => $artists) {
+            if (empty($artists)) {
+                continue;
+            }
+            $label = trim($groupName);
+            if ($label === '') {
+                continue;
+            }
+            if (!preg_match('/[:：]$/u', $label)) {
+                $label .= ':';
+            }
+            $lines[] = $label . ' ' . implode(', ', $artists);
+        }
+    }
+
+    if ($ticketCode && !$hasTicketPlaceholder) {
+        if ($lines && end($lines) !== '') {
+            $lines[] = '';
+        }
+        $lines[] = "'''[http://www.zazerkal.spb.ru/tickets/{$ticketCode}.htm|КУПИТЬ БИЛЕТ]'''";
+    }
+
+    $text = trim(implode("\n", $lines));
+    if ($text !== '') {
+        $result['text'] = $text;
+        $result['has_data'] = true;
+    }
+    if ($pendingEntries) {
+        foreach ($pendingEntries as $pending) {
+            $roleLabel = trim((string)($pending['role'] ?? 'Роль'));
+            if ($roleLabel === '') {
+                $roleLabel = 'Роль';
+            }
+            $actorLabel = trim((string)($pending['actor'] ?? ''));
+            if ($actorLabel === '') {
+                $actorLabel = '—';
+            }
+            $result['warnings'][] = "{$roleLabel} — {$actorLabel}";
+        }
+    }
+
+    return $result;
+}
+
+function fetchTemzaEventsSnapshot(PDO $pdo, string $monthLabel): array
+{
+    $stmt = $pdo->prepare("
+        SELECT
+            te.id,
+            te.event_date,
+            te.start_time,
+            te.hall,
+            te.month_label,
+            tt.play_id,
+            tt.temza_title,
+            p.site_title,
+            p.full_name,
+            tcr.id AS cast_id,
+            tcr.temza_role_raw,
+            tcr.temza_role_source,
+            tcr.temza_role_normalized,
+            tcr.temza_role_notes,
+            tcr.temza_actor,
+            tcr.is_debut,
+            tcr.mapped_role_id,
+            tcr.mapped_group,
+            tcr.status,
+            r.role_name,
+            r.sort_order
+        FROM temza_events te
+        LEFT JOIN temza_titles tt ON tt.id = te.temza_title_id
+        LEFT JOIN plays p ON p.id = tt.play_id
+        LEFT JOIN temza_cast_resolved tcr ON tcr.temza_event_id = te.id
+        LEFT JOIN roles r ON r.role_id = tcr.mapped_role_id
+        WHERE te.month_label = ?
+        ORDER BY te.event_date, te.start_time, te.id, r.sort_order, tcr.id
+    ");
+    $stmt->execute([$monthLabel]);
+
+    $snapshot = [];
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $key = buildTemzaEventKey($row);
+        if (!isset($snapshot[$key])) {
+            $playLabel = formatPlayTitle($row['site_title'] ?? null, $row['full_name'] ?? null);
+            if ($playLabel === '') {
+                $playLabel = trim((string)($row['temza_title'] ?? ''));
+            }
+            $snapshot[$key] = [
+                'id' => (int)$row['id'],
+                'play_id' => $row['play_id'] ? (int)$row['play_id'] : null,
+                'play_label' => $playLabel !== '' ? $playLabel : trim((string)($row['temza_title'] ?? '')),
+                'event_date' => $row['event_date'],
+                'start_time' => $row['start_time'],
+                'hall' => $row['hall'],
+                'cast' => [],
+                'role_labels' => [],
+            ];
+        }
+
+        if (empty($row['cast_id'])) {
+            continue;
+        }
+
+        $status = $row['status'] ?? 'pending';
+        if ($status === 'ignored') {
+            continue;
+        }
+        $roleKey = resolveTemzaRoleKey($row);
+        if ($roleKey === null) {
+            continue;
+        }
+
+        $label = resolveTemzaRoleLabel($row);
+        if ($label !== null) {
+            $snapshot[$key]['role_labels'][$roleKey] = $label;
+        }
+
+        $presentation = buildTemzaCastPresentation($row);
+        if ($presentation === null) {
+            continue;
+        }
+
+        if (!isset($snapshot[$key]['cast'][$roleKey])) {
+            $snapshot[$key]['cast'][$roleKey] = [];
+        }
+        $snapshot[$key]['cast'][$roleKey][] = $presentation;
+    }
+
+    foreach ($snapshot as &$item) {
+        foreach ($item['cast'] as $roleKey => &$entries) {
+            $entries = array_values(array_unique($entries));
+            sort($entries, SORT_NATURAL | SORT_FLAG_CASE);
+        }
+        unset($entries);
+    }
+    unset($item);
+
+    return $snapshot;
+}
+
+function buildTemzaEventKey(array $row): string
+{
+    $date = $row['event_date'] ?? '';
+    $time = $row['start_time'] ?? '';
+    $hall = mb_strtolower(trim((string)($row['hall'] ?? '')));
+    if ($date === '' || $time === '') {
+        return 'id:' . (int)$row['id'];
+    }
+    return implode('|', [$date, $time, $hall]);
+}
+
+function resolveTemzaRoleKey(array $row): ?string
+{
+    if (!empty($row['mapped_role_id'])) {
+        return 'role:' . (int)$row['mapped_role_id'];
+    }
+    if (!empty($row['mapped_group'])) {
+        return 'group:' . mb_strtolower(trim((string)$row['mapped_group']));
+    }
+    if (!empty($row['temza_role_normalized'])) {
+        return 'raw:' . $row['temza_role_normalized'];
+    }
+    if (!empty($row['temza_role_raw'])) {
+        return 'raw:' . normalizeTemzaRole($row['temza_role_raw']);
+    }
+    return null;
+}
+
+function resolveTemzaRoleLabel(array $row): ?string
+{
+    if (!empty($row['mapped_group'])) {
+        return $row['mapped_group'];
+    }
+    if (!empty($row['role_name'])) {
+        return $row['role_name'];
+    }
+    if (!empty($row['temza_role_source'])) {
+        return $row['temza_role_source'];
+    }
+    if (!empty($row['temza_role_raw'])) {
+        return $row['temza_role_raw'];
+    }
+    return null;
+}
+
+function buildTemzaCastPresentation(array $row): ?string
+{
+    $actor = trim((string)($row['temza_actor'] ?? ''));
+    if ($actor === '') {
+        return null;
+    }
+    $parts = [$actor];
+    $notes = trim((string)($row['temza_role_notes'] ?? ''));
+    if ($notes !== '') {
+        $parts[] = "({$notes})";
+    }
+    if (!empty($row['is_debut'])) {
+        $parts[] = "(''впервые в роли'')";
+    }
+    return implode(' ', $parts);
+}
+
+function logTemzaChanges(PDO $pdo, string $monthLabel, array $previousSnapshot): void
+{
+    if (!$previousSnapshot) {
+        return;
+    }
+
+    $currentSnapshot = fetchTemzaEventsSnapshot($pdo, $monthLabel);
+    if (!$currentSnapshot) {
+        return;
+    }
+
+    $currentEventIds = array_values(array_map(fn($item) => (int)$item['id'], $currentSnapshot));
+    if ($currentEventIds) {
+        $placeholders = implode(',', array_fill(0, count($currentEventIds), '?'));
+        $stmt = $pdo->prepare("DELETE FROM temza_change_log WHERE temza_event_id IN ($placeholders)");
+        $stmt->execute($currentEventIds);
+    }
+
+    foreach ($previousSnapshot as $key => $oldData) {
+        if (!isset($currentSnapshot[$key])) {
+            continue;
+        }
+        $newData = $currentSnapshot[$key];
+
+        $changes = [];
+        if ((int)($oldData['play_id'] ?? 0) !== (int)($newData['play_id'] ?? 0)) {
+            $changes[] = [
+                'type' => 'play',
+                'before' => $oldData['play_label'] ?? null,
+                'after' => $newData['play_label'] ?? null,
+            ];
+        }
+
+        $castDiff = diffTemzaCast($oldData['cast'] ?? [], $newData['cast'] ?? [], $newData['role_labels'] + ($oldData['role_labels'] ?? []));
+        if ($castDiff) {
+            $changes = array_merge($changes, $castDiff);
+        }
+
+        if ($changes) {
+            insertTemzaChangeLog($pdo, (int)$newData['id'], $changes);
+        }
+    }
+}
+
+function diffTemzaCast(array $oldCast, array $newCast, array $roleLabels): array
+{
+    $changes = [];
+    $allKeys = array_unique(array_merge(array_keys($oldCast), array_keys($newCast)));
+    foreach ($allKeys as $roleKey) {
+        $before = $oldCast[$roleKey] ?? [];
+        $after = $newCast[$roleKey] ?? [];
+        if ($before === $after) {
+            continue;
+        }
+        $changes[] = [
+            'type' => 'cast',
+            'role' => $roleLabels[$roleKey] ?? $roleKey,
+            'before' => $before,
+            'after' => $after,
+        ];
+    }
+    return $changes;
+}
+
+function insertTemzaChangeLog(PDO $pdo, int $temzaEventId, array $changes): void
+{
+    $stmt = $pdo->prepare("
+        INSERT INTO temza_change_log (temza_event_id, changes_json)
+        VALUES (?, ?)
+    ");
+    $stmt->execute([
+        $temzaEventId,
+        json_encode($changes, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ]);
+}
+
+function getTemzaChangeLogForEvents(array $eventIds): array
+{
+    if (!$eventIds) {
+        return [];
+    }
+    $pdo = getDBConnection();
+    $placeholders = implode(',', array_fill(0, count($eventIds), '?'));
+    $stmt = $pdo->prepare("
+        SELECT temza_event_id, changes_json, created_at
+        FROM temza_change_log
+        WHERE temza_event_id IN ($placeholders)
+        ORDER BY created_at DESC
+    ");
+    $stmt->execute($eventIds);
+
+    $result = [];
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $eventId = (int)$row['temza_event_id'];
+        if (!isset($result[$eventId])) {
+            $result[$eventId] = [];
+        }
+        $result[$eventId][] = [
+            'changes' => json_decode($row['changes_json'] ?? '[]', true) ?: [],
+            'created_at' => $row['created_at'],
+        ];
+    }
+    return $result;
+}
+
+function decodeTemzaJsonAssoc($value): array
+{
+    if (!$value) {
+        return [];
+    }
+    $decoded = json_decode($value, true);
+    return is_array($decoded) ? $decoded : [];
+}
+
+function normalizeRoleLabelForTemza(string $value): string
+{
+    $clean = preg_replace("/('{2,})/u", '', $value);
+    if (preg_match('/\[\[(?:[^|\]]+\|)?([^\]]+)\]\]/u', $clean, $match)) {
+        $clean = $match[1];
+    }
+    return normalizeTemzaRole($clean);
+}
+
+function extractNamesByPattern(array $data, string $pattern): array
+{
+    $names = [];
+    foreach ($data as $label => $value) {
+        if (!preg_match($pattern, (string)$label)) {
+            continue;
+        }
+        $names = array_merge($names, flattenManualNameList($value));
+    }
+    $names = array_values(array_filter(array_unique($names), fn($name) => $name !== ''));
+    return $names;
+}
+
+function flattenManualNameList($value): array
+{
+    if (is_array($value)) {
+        $items = [];
+        foreach ($value as $item) {
+            if (is_array($item)) {
+                $items = array_merge($items, flattenManualNameList($item));
+            } else {
+                $items[] = (string)$item;
+            }
+        }
+    } else {
+        $items = preg_split('/[,;\/\n]+/u', (string)$value);
+    }
+    $result = [];
+    foreach ($items as $item) {
+        $item = trim((string)$item);
+        if ($item === '') {
+            continue;
+        }
+        $result = array_merge($result, splitManualNameTokens($item));
+    }
+    return $result;
+}
+
+function appendManualAssignmentsToCast(
+    array &$castByRole,
+    array &$groups,
+    array &$extraGroups,
+    array $normalizedRoleIndex,
+    array $roleIndex,
+    string $targetRoleNormalized,
+    array $names,
+    string $fallbackGroupLabel,
+    bool $forceGroupOutput = false
+): void {
+    if (!$names) {
+        return;
+    }
+    $targetRoleId = $targetRoleNormalized !== '' ? ($normalizedRoleIndex[$targetRoleNormalized] ?? null) : null;
+
+    foreach ($names as $name) {
+        if ($targetRoleId) {
+            if (!isset($castByRole[$targetRoleId])) {
+                $castByRole[$targetRoleId] = [];
+            }
+            if (!in_array($name, $castByRole[$targetRoleId], true)) {
+                $castByRole[$targetRoleId][] = $name;
+            }
+        } else {
+            if (!isset($groups[$fallbackGroupLabel])) {
+                $groups[$fallbackGroupLabel] = [];
+            }
+            if (!in_array($name, $groups[$fallbackGroupLabel], true)) {
+                $groups[$fallbackGroupLabel][] = $name;
+            }
+        }
+    }
+
+    if ($targetRoleId && isset($castByRole[$targetRoleId])) {
+        $castByRole[$targetRoleId] = array_values(array_unique($castByRole[$targetRoleId]));
+    } elseif (!$targetRoleId && isset($groups[$fallbackGroupLabel])) {
+        $groups[$fallbackGroupLabel] = array_values(array_unique($groups[$fallbackGroupLabel]));
+        if ($forceGroupOutput) {
+            $extraGroups[$fallbackGroupLabel] = true;
+        }
+    }
+}
+
+function splitActorTokens(string $actor, bool $isDebut): array
+{
+    $actor = trim($actor);
+    if ($actor === '') {
+        return [];
+    }
+
+    $normalized = preg_replace('/([а-яёa-z])([А-ЯЁA-Z])/u', '$1,$2', $actor);
+    $candidates = preg_split('/\s*,\s*/u', $normalized);
+    if (!$candidates || count($candidates) === 0) {
+        $candidates = [$actor];
+    }
+
+    $entries = [];
+    foreach ($candidates as $candidate) {
+        $candidate = trim(preg_replace('/\s+/u', ' ', $candidate));
+        if ($candidate === '') {
+            continue;
+        }
+        if ($isDebut) {
+            $candidate .= " (''впервые в роли'')";
+        }
+        $entries[] = $candidate;
+    }
+
+    return $entries ? array_values(array_unique($entries)) : [];
+}
+
+function splitManualNameTokens(string $value): array
+{
+    if ($value === '') {
+        return [];
+    }
+    $clean = preg_replace('/\((.*?)\)/u', '', $value);
+    $clean = trim($clean);
+    if ($clean === '' || preg_match('/^ввод\b/iu', $clean) || preg_match('/страхует\b/iu', $clean)) {
+        return [];
+    }
+    $normalized = preg_replace('/([а-яёa-z])([А-ЯЁA-Z])/u', '$1,$2', $clean);
+    $parts = preg_split('/\s*,\s*/u', $normalized);
+    if (!$parts || count($parts) === 0) {
+        $parts = [$clean];
+    }
+    $result = [];
+    foreach ($parts as $part) {
+        $part = trim(preg_replace('/\s+/u', ' ', $part));
+        if ($part === '' || preg_match('/^ввод\b/iu', $part) || preg_match('/страхует\b/iu', $part)) {
+            continue;
+        }
+        $result[] = $part;
+    }
+    return $result;
 }
 
 // === System Settings ===

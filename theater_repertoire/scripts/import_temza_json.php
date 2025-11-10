@@ -60,8 +60,9 @@ $insertEventStmt = $pdo->prepare('
         notes_json,
         raw_html,
         raw_json,
-        scraped_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        scraped_at,
+        status
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ');
 
 function encodeJson($value): ?string
@@ -227,11 +228,155 @@ function autoMatchEvents(PDO $pdo, string $monthLabel): void
           AND te.start_time IS NOT NULL
     ";
 
-$stmt = $pdo->prepare($sql);
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([$monthLabel]);
+
+    $sqlFallback = "
+        UPDATE temza_events te
+        JOIN (
+            SELECT er.id,
+                   er.event_date,
+                   er.event_time
+            FROM events_raw er
+            JOIN (
+                SELECT event_date, event_time
+                FROM events_raw
+                GROUP BY event_date, event_time
+                HAVING COUNT(*) = 1
+            ) uniq
+              ON uniq.event_date = er.event_date
+             AND uniq.event_time = er.event_time
+        ) matched
+          ON matched.event_date = te.event_date
+         AND matched.event_time = te.start_time
+        SET te.matched_event_id = matched.id
+        WHERE te.month_label = ?
+          AND te.matched_event_id IS NULL
+          AND te.event_date IS NOT NULL
+          AND te.start_time IS NOT NULL
+    ";
+
+    $stmt = $pdo->prepare($sqlFallback);
     $stmt->execute([$monthLabel]);
 }
 
 $playIndex = buildPlayIndex($pdo);
+
+function snapshotTemzaEventState(PDO $pdo, string $monthLabel): array
+{
+    $stmt = $pdo->prepare("
+        SELECT temza_title_id,
+               event_date,
+               start_time,
+               hall,
+               matched_event_id,
+               ignore_in_schedule,
+               published_at,
+               published_by
+        FROM temza_events
+        WHERE month_label = ?
+    ");
+    $stmt->execute([$monthLabel]);
+
+    $snapshot = [];
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $key = buildTemzaStateKey(
+            (int)$row['temza_title_id'],
+            $row['event_date'] ?? '',
+            $row['start_time'] ?? '',
+            $row['hall'] ?? ''
+        );
+        $snapshot[$key] = [
+            'matched_event_id' => $row['matched_event_id'] ? (int)$row['matched_event_id'] : null,
+            'ignore_in_schedule' => !empty($row['ignore_in_schedule']),
+            'published_at' => $row['published_at'] ?? null,
+            'published_by' => $row['published_by'] ? (int)$row['published_by'] : null,
+        ];
+
+        $fallbackKey = buildTemzaStateKey(
+            (int)$row['temza_title_id'],
+            $row['event_date'] ?? '',
+            $row['start_time'] ?? '',
+            ''
+        );
+        if ($fallbackKey !== $key && !isset($snapshot[$fallbackKey])) {
+            $snapshot[$fallbackKey] = $snapshot[$key];
+        }
+    }
+
+    return $snapshot;
+}
+
+function restoreTemzaEventState(PDO $pdo, string $monthLabel, array $snapshot): void
+{
+    if (!$snapshot) {
+        return;
+    }
+
+    $stmt = $pdo->prepare("
+        SELECT id, temza_title_id, event_date, start_time, hall
+        FROM temza_events
+        WHERE month_label = ?
+    ");
+    $stmt->execute([$monthLabel]);
+
+    $updateMatchStmt = $pdo->prepare("UPDATE temza_events SET matched_event_id = ? WHERE id = ?");
+    $updateIgnoreStmt = $pdo->prepare("UPDATE temza_events SET ignore_in_schedule = ? WHERE id = ?");
+    $updatePublishStmt = $pdo->prepare("UPDATE temza_events SET published_at = ?, published_by = ? WHERE id = ?");
+
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $key = buildTemzaStateKey(
+            (int)$row['temza_title_id'],
+            $row['event_date'] ?? '',
+            $row['start_time'] ?? '',
+            $row['hall'] ?? ''
+        );
+        $data = $snapshot[$key] ?? null;
+        if (!$data) {
+            $fallbackKey = buildTemzaStateKey(
+                (int)$row['temza_title_id'],
+                $row['event_date'] ?? '',
+                $row['start_time'] ?? '',
+                ''
+            );
+            $data = $snapshot[$fallbackKey] ?? null;
+        }
+        if (!$data) {
+            continue;
+        }
+
+        if (!empty($data['matched_event_id']) && eventsRawExists($pdo, (int)$data['matched_event_id'])) {
+            $updateMatchStmt->execute([(int)$data['matched_event_id'], (int)$row['id']]);
+        }
+        $updateIgnoreStmt->execute([!empty($data['ignore_in_schedule']) ? 1 : 0, (int)$row['id']]);
+        if (!empty($data['published_at'])) {
+            $updatePublishStmt->execute([$data['published_at'], $data['published_by'] ?: null, (int)$row['id']]);
+        }
+    }
+}
+
+function buildTemzaStateKey(int $titleId, ?string $date, ?string $time, ?string $hall): string
+{
+    $normalizedHall = mb_strtolower(trim((string)$hall), 'UTF-8');
+    return implode('|', [
+        $titleId,
+        $date ?? '',
+        $time ?? '',
+        $normalizedHall,
+    ]);
+}
+
+function eventsRawExists(PDO $pdo, int $eventId): bool
+{
+    static $cache = [];
+    if (array_key_exists($eventId, $cache)) {
+        return $cache[$eventId];
+    }
+    $stmt = $pdo->prepare("SELECT 1 FROM events_raw WHERE id = ?");
+    $stmt->execute([$eventId]);
+    $cache[$eventId] = (bool)$stmt->fetchColumn();
+    return $cache[$eventId];
+}
 
 function getPlayIdForTitle(PDOStatement $stmt, int $titleId): ?int
 {
@@ -240,143 +385,6 @@ function getPlayIdForTitle(PDOStatement $stmt, int $titleId): ?int
     return $playId ? (int)$playId : null;
 }
 
-function loadRoleMap(PDO $pdo, PDOStatement $stmt, ?int $playId): array
-{
-    if (!$playId) {
-        return [];
-    }
-    $stmt->execute([$playId]);
-    $map = [];
-    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        $normalized = normalizeTitle($row['temza_role'] ?? '');
-        if ($normalized === '') {
-            continue;
-        }
-        $map[$normalized] = [
-            'target_role_id' => $row['target_role_id'] ? (int)$row['target_role_id'] : null,
-            'target_group_name' => $row['target_group_name'] ?? null,
-            'split_comma' => (int)($row['split_comma'] ?? 1) === 1,
-            'ignore_role' => (int)($row['ignore_role'] ?? 0) === 1,
-        ];
-    }
-    return $map;
-}
-
-function splitRoleTokens(string $role, bool $allowSplit = true): array
-{
-    if (!$allowSplit) {
-        return [trim($role)];
-    }
-
-    $result = [];
-    $buffer = '';
-    $depth = 0;
-    $chars = preg_split('//u', $role, -1, PREG_SPLIT_NO_EMPTY);
-    foreach ($chars as $ch) {
-        if ($ch === '(') {
-            $depth++;
-        } elseif ($ch === ')' && $depth > 0) {
-            $depth--;
-        }
-
-        if ($ch === ',' && $depth === 0) {
-            if (trim($buffer) !== '') {
-                $result[] = trim($buffer);
-            }
-            $buffer = '';
-            continue;
-        }
-
-        $buffer .= $ch;
-    }
-    if (trim($buffer) !== '') {
-        $result[] = trim($buffer);
-    }
-
-    return $result ?: [trim($role)];
-}
-
-function resolveCastEntries(
-    PDO $pdo,
-    PDOStatement $roleMapStmt,
-    PDOStatement $deleteCastStmt,
-    PDOStatement $insertCastStmt,
-    int $temzaEventId,
-    ?int $playId,
-    array $castRows
-): void {
-    $deleteCastStmt->execute([$temzaEventId]);
-
-    if (!$castRows) {
-        return;
-    }
-
-    $roleMap = loadRoleMap($pdo, $roleMapStmt, $playId);
-
-    $seenAssignments = [];
-
-    foreach ($castRows as $entry) {
-        $rawRole = trim($entry['role'] ?? '');
-        $actor = trim($entry['actor'] ?? '');
-        if ($rawRole === '' || $actor === '') {
-            continue;
-        }
-
-        $notesArray = isset($entry['roleNotes']) && is_array($entry['roleNotes']) ? $entry['roleNotes'] : [];
-        $notes = $notesArray ? implode('; ', $notesArray) : null;
-        $isDebut = !empty($entry['isDebut']) ? 1 : 0;
-
-        $normalizedFull = normalizeTitle($rawRole);
-        $splitAllowed = true;
-        if ($normalizedFull !== '' && isset($roleMap[$normalizedFull])) {
-            $splitAllowed = $roleMap[$normalizedFull]['split_comma'];
-        }
-
-        $tokens = splitRoleTokens($rawRole, $splitAllowed);
-
-        foreach ($tokens as $token) {
-            $normalizedToken = normalizeTitle($token);
-            $mapping = $normalizedToken !== '' ? ($roleMap[$normalizedToken] ?? null) : null;
-            $ignoreRole = $mapping ? !empty($mapping['ignore_role']) : false;
-            $mappedRoleId = (!$ignoreRole && $mapping && $mapping['target_role_id']) ? (int)$mapping['target_role_id'] : null;
-            $mappedGroup = (!$ignoreRole && $mapping) ? ($mapping['target_group_name'] ?? null) : null;
-            $status = $ignoreRole ? 'ignored' : (($mappedRoleId || $mappedGroup) ? 'mapped' : 'pending');
-
-            if ($ignoreRole) {
-                $mappedRoleId = null;
-                $mappedGroup = null;
-            }
-
-            $assignmentKey = null;
-            if ($mappedRoleId !== null) {
-                $assignmentKey = 'role:' . $mappedRoleId . '|actor:' . $actor;
-            } elseif ($mappedGroup !== null) {
-                $assignmentKey = 'group:' . $mappedGroup . '|actor:' . $actor;
-            }
-
-            if ($assignmentKey && isset($seenAssignments[$assignmentKey])) {
-                continue;
-            }
-            if ($assignmentKey) {
-                $seenAssignments[$assignmentKey] = true;
-            }
-
-            $insertCastStmt->execute([
-                $temzaEventId,
-                $playId,
-                $token,
-                $rawRole,
-                $normalizedToken ?: null,
-                $actor,
-                $notes,
-                $isDebut,
-                $mappedRoleId,
-                $mappedGroup,
-                $status,
-            ]);
-        }
-    }
-}
 $files = array_slice($argv, 1);
 
 foreach ($files as $filePath) {
@@ -401,6 +409,8 @@ foreach ($files as $filePath) {
     $spectacles = $payload['spectacles'] ?? [];
     $scrapedAt = parseScrapedAt($payload['scrapedAt'] ?? null);
 
+    $previousCastSnapshot = fetchTemzaEventsSnapshot($pdo, $monthLabel);
+    $previousStateSnapshot = snapshotTemzaEventState($pdo, $monthLabel);
     $pdo->beginTransaction();
     $deleteByMonthStmt->execute([$monthLabel]);
 
@@ -441,6 +451,8 @@ foreach ($files as $filePath) {
         $rawHtml = $spectacle['rawHtml'] ?? null;
         $rawJson = encodeJson($spectacle);
 
+        $status = ($spectacle['status'] ?? '') === 'cancelled' ? 'cancelled' : 'scheduled';
+
         $insertEventStmt->execute([
             $temzaTitleId,
             $title,
@@ -461,6 +473,7 @@ foreach ($files as $filePath) {
             $rawHtml,
             $rawJson,
             $scrapedAt,
+            $status,
         ]);
 
         $temzaEventId = (int)$pdo->lastInsertId();
@@ -479,6 +492,8 @@ foreach ($files as $filePath) {
     }
 
     autoMatchEvents($pdo, $monthLabel);
+    restoreTemzaEventState($pdo, $monthLabel, $previousStateSnapshot);
+    logTemzaChanges($pdo, $monthLabel, $previousCastSnapshot);
     $pdo->commit();
 
     echo sprintf(

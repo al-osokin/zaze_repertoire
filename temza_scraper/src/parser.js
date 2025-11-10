@@ -2,19 +2,15 @@ const cheerio = require('cheerio');
 
 const cleanText = (value) => (value || '').replace(/\s+/g, ' ').trim();
 
+const EMPTY_ROLE_PLACEHOLDER = '<EMPTY>';
+
 const normalizeJoinedNames = (value) => {
   if (!value) return '';
-  const patterns = [
-    /([а-яё])([А-ЯЁ][а-яё])/g,
-    /([a-z])([A-Z][a-z])/g,
-  ];
-
-  let normalized = value;
-  patterns.forEach((pattern) => {
-    normalized = normalized.replace(pattern, '$1, $2');
-  });
-
-  return cleanText(normalized.replace(/\s*,\s*/g, ', '));
+  const withSpacing = value.replace(
+    /([а-яёa-z])([А-ЯЁA-Z][а-яёa-z]*)/g,
+    '$1, $2'
+  );
+  return cleanText(withSpacing.replace(/\s*,\s*/g, ', '));
 };
 const cleanMultiline = (value) =>
   (value || '')
@@ -45,16 +41,25 @@ const parseRoleCell = ($, cell) => {
     }
   });
 
-  const baseRole =
-    textNodes.join(' ').trim() ||
-    cleanText(
+  let baseRole = textNodes.join(' ').trim();
+  if (!baseRole) {
+    const headingText = cleanText(
       $cell
-        .clone()
-        .children()
-        .remove()
-        .end()
+        .find('h1, h2, h3, h4, h5, h6, strong, b')
+        .first()
         .text()
     );
+    if (headingText) {
+      baseRole = headingText;
+    } else {
+      const cloned = $cell.clone();
+      cloned.find('div').each((_, el) => {
+        const text = cleanText($(el).text());
+        cloned.text(cloned.text().replace(text, ' '));
+      });
+      baseRole = cleanText(cloned.text());
+    }
+  }
 
   const notes = [];
   $cell.find('div').each((_, el) => {
@@ -72,6 +77,14 @@ const parseRoleCell = ($, cell) => {
   const normalizedNotes = [...new Set(notes)];
   const isDebut = normalizedNotes.some((note) => /^ввод/i.test(note));
 
+  normalizedNotes.forEach((note) => {
+    if (!note) {
+      return;
+    }
+    baseRole = baseRole.replace(note, ' ');
+  });
+  baseRole = baseRole.trim();
+
   return {
     role: baseRole,
     notes: normalizedNotes,
@@ -87,14 +100,45 @@ const extractCast = ($) => {
   if (!table.length) return [];
 
   const rows = [];
+  let currentGroup = null;
   table.find('tbody tr').each((_, row) => {
     const cells = $(row).find('td');
+    if (!cells.length) return;
+
+    const firstCell = $(cells[0]);
+    const colSpan = Number(firstCell.attr('colspan') || 1);
+    const isHeadingRow = cells.length === 1 || colSpan > 1;
+    if (isHeadingRow) {
+      const headingText = cleanText(firstCell.text());
+      if (headingText) {
+        currentGroup = headingText;
+      }
+      return;
+    }
+
     if (cells.length < 2) return;
+
     const { role, notes, isDebut } = parseRoleCell($, cells[0]);
+    const trimmedRole = role ? role.trim() : '';
+    const isIndexRole =
+      trimmedRole && /^\d+(?:[.)]?)?(?:\([^)]*\))?$/.test(trimmedRole);
+    const startsWithNumber = Boolean(trimmedRole && /^\d/.test(trimmedRole));
+    const continueGroup = Boolean(currentGroup && startsWithNumber);
     const actorRaw = cleanText($(cells[1]).text());
     const actor = normalizeJoinedNames(actorRaw);
-    if (role && actor) {
-      const entry = { role, actor };
+    if (role && !actor) {
+      currentGroup = role;
+      return;
+    }
+    const resolvedRole =
+      (!continueGroup && !isIndexRole && role) ||
+      currentGroup ||
+      EMPTY_ROLE_PLACEHOLDER;
+    if (resolvedRole && actor) {
+      if (role && !continueGroup && !isIndexRole) {
+        currentGroup = null;
+      }
+      const entry = { role: resolvedRole, actor };
       if (notes.length) {
         entry.roleNotes = notes;
       }

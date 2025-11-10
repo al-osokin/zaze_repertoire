@@ -29,6 +29,7 @@ async function main() {
           previewTitle: preview.title,
           previewDetails: preview.details || null,
           ...data,
+          status: data.status || preview.status || 'scheduled',
         })),
       };
 

@@ -14,9 +14,14 @@ const excludePatterns = [
   /^Лекция/i,
   /^Танец[:\s]/i,
 ];
+const specialTitles = ['Скрипач на крыше'];
+
 const shouldProcessTitle = (title) => {
   if (!title) return false;
-  if (!includePatterns.some((regex) => regex.test(title))) return false;
+  const normalized = title.trim();
+  if (!includePatterns.some((regex) => regex.test(normalized)) && !specialTitles.includes(normalized)) {
+    return false;
+  }
   if (excludePatterns.some((regex) => regex.test(title))) return false;
   return true;
 };
@@ -29,7 +34,8 @@ const getEntryPreview = (page, handle) =>
       node.closest('.MuiBox-root')?.querySelector('.details') ??
       node.parentElement?.querySelector('.details');
     const details = detailsNode ? detailsNode.textContent.trim() : '';
-    return { title, details };
+    const isCancelled = !!node.closest('.canceled');
+    return { title, details, status: isCancelled ? 'cancelled' : 'scheduled' };
   });
 
 async function openPopup(page, entryHandle) {
@@ -39,6 +45,26 @@ async function openPopup(page, entryHandle) {
       page.waitForSelector(selectors.performance.popup, { visible: true }),
       clickTarget.click(),
     ]);
+    await page
+      .waitForFunction(
+        (popupSelector, castSelector, responsiblesSelector) => {
+          const popup = document.querySelector(popupSelector);
+          if (!popup) return false;
+          const castReady = popup.querySelector(castSelector);
+          if (castReady && castReady.textContent.trim().length > 0) {
+            return true;
+          }
+          const respReady = popup.querySelector(responsiblesSelector);
+          return !!respReady;
+        },
+        { timeout: 10000 },
+        selectors.performance.popup,
+        selectors.performance.castRows,
+        selectors.performance.responsiblesRows
+      )
+      .catch(async () => {
+        await delay(500);
+      });
   } finally {
     await clickTarget.dispose();
   }
@@ -83,6 +109,7 @@ async function scrapeSpectacleEntries(page, { limit } = {}) {
     await closePopup(page);
 
     const data = extractPopupData(popupHtml, { fallbackTitle: preview.title });
+    data.status = preview.status;
     records.push({
       preview,
       data,

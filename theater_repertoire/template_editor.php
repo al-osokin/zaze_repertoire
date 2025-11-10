@@ -12,6 +12,11 @@ $playId = $_GET['play_id'] ?? null;
 $play = null;
 $templateElements = [];
 $playDisplayTitle = '';
+$roleSpecialGroupOptions = [
+    '' => '— не выбрано —',
+    'conductor' => 'Дирижёр (ответственный)',
+    'concertmaster' => 'Концертмейстер / пианист',
+];
 
 if ($playId) {
     $play = getPlayById($playId);
@@ -43,13 +48,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
                 }
 
                 $shouldSave = false;
-                if ($elementType === 'newline') {
+                if ($elementType === 'newline' || $elementType === 'ticket_button') {
                     $shouldSave = true;
                 } elseif (!empty($elementType) && $elementValue !== '') {
                     $shouldSave = true;
                 }
 
+                $specialGroup = null;
+                if ($elementType === 'role') {
+                    $rawSpecialGroup = trim((string)($element['special_group'] ?? ''));
+                    if (!array_key_exists($rawSpecialGroup, $roleSpecialGroupOptions)) {
+                        $rawSpecialGroup = '';
+                    }
+                    $specialGroup = $rawSpecialGroup !== '' ? $rawSpecialGroup : null;
+                }
+
                 if ($shouldSave) {
+                    $usePreviousCast = !empty($element['use_previous_cast']);
                     if ($elementType === 'role') {
                         $existingRoleId = isset($element['role_id']) ? (int)$element['role_id'] : null;
                         $resolvedRoleId = resolveRoleValueToId((int)$playId, (string)$elementValue, $sortOrder, $existingRoleId);
@@ -58,7 +73,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
                         }
                         $elementValue = (string)$resolvedRoleId;
                     }
-                    saveTemplateElement($playId, $elementType, $elementValue, $sortOrder, $headingLevel);
+                    saveTemplateElement($playId, $elementType, $elementValue, $sortOrder, $headingLevel, $usePreviousCast, $specialGroup);
                 }
             }
             $message = 'Шаблон успешно сохранен.';
@@ -121,6 +136,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
         .element-item .actions {
             margin-left: 10px;
         }
+        .use-previous-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 6px;
+            font-size: 0.85rem;
+        }
+        .role-flags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 6px;
+            font-size: 0.85rem;
+            align-items: center;
+        }
+        .role-group-indicator {
+            color: #4b5563;
+        }
     </style>
 </head>
 <body>
@@ -146,19 +179,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
                         $elementValue = $element['element_value'];
                         $roleNameForValue = '';
                         $roleIdAttr = '';
+                        $usePrevious = !empty($element['use_previous_cast']);
 
-                        if ($elementType === 'role') {
-                            $role = getRoleById($elementValue);
-                            $roleNameForValue = $role['role_name'] ?? '';
-                            $roleIdAttr = (string)$elementValue;
-                        }
+                if ($elementType === 'role') {
+                    $role = getRoleById($elementValue);
+                    $roleNameForValue = $role['role_name'] ?? '';
+                    $roleIdAttr = (string)$elementValue;
+                }
                     ?>
                         <div class="element-item"
                              data-id="<?php echo $element['id']; ?>"
                              data-type="<?php echo htmlspecialchars($elementType); ?>"
                              data-value="<?php echo htmlspecialchars($elementType === 'role' && $roleNameForValue !== '' ? $roleNameForValue : $elementValue); ?>"
                              data-role-id="<?php echo htmlspecialchars($roleIdAttr); ?>"
-                             data-heading-level="<?php echo (int)($element['heading_level'] ?? 0); ?>">
+                             data-heading-level="<?php echo (int)($element['heading_level'] ?? 0); ?>"
+                             data-use-previous="<?php echo $usePrevious ? '1' : '0'; ?>"
+                             data-special-group="<?php echo htmlspecialchars($element['special_group'] ?? ''); ?>">
                             <span class="handle">☰</span>
                             <div class="content">
                                 <?php if ($elementType === 'heading'): ?>
@@ -174,8 +210,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
                                         }
                                         echo '<strong>Роль:</strong> <span class="element-text">' . htmlspecialchars($roleDisplay ?: 'Неизвестная роль') . '</span>';
                                     ?>
+                                    <div class="role-flags">
+                                        <label class="use-previous-toggle">
+                                            <input type="checkbox" class="toggle-use-previous" <?php echo $usePrevious ? 'checked' : ''; ?>>
+                                            Брать предыдущий состав
+                                        </label>
+                                        <span class="role-group-indicator">
+                                            Группа: <?php echo htmlspecialchars($roleSpecialGroupOptions[$element['special_group'] ?? ''] ?? '— не выбрано —'); ?>
+                                        </span>
+                                    </div>
                                 <?php elseif ($elementType === 'newline'): ?>
                                     <em>Пустая строка</em>
+                                <?php elseif ($elementType === 'ticket_button'): ?>
+                                    <?php $hasCustomLink = trim((string)$elementValue) !== ''; ?>
+                                    <strong>Кнопка билетов:</strong>
+                                    <span class="element-text">
+                                        <?php echo $hasCustomLink ? 'Своя ссылка: ' . htmlspecialchars($elementValue) : 'Авто: ссылка по коду спектакля'; ?>
+                                    </span>
                                 <?php endif; ?>
                             </div>
                             <div class="actions">
@@ -191,6 +242,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
                     <button type="button" id="add-image" class="btn-secondary">Добавить картинку</button>
                     <button type="button" id="add-role" class="btn-secondary">Добавить роль</button>
                     <button type="button" id="add-newline" class="btn-secondary">Добавить пустую строку</button>
+                    <button type="button" id="add-ticket-button" class="btn-secondary">Добавить ссылку на билеты</button>
                 </div>
 
                 <form method="post" class="mt-4">
@@ -208,6 +260,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
     <script>
         const templateElementsList = document.getElementById('template-elements-list');
         const elementsJsonInput = document.getElementById('elements-json-input');
+        const SPECIAL_GROUP_OPTIONS = <?php echo json_encode($roleSpecialGroupOptions, JSON_UNESCAPED_UNICODE); ?>;
 
         new Sortable(templateElementsList, {
             handle: '.handle',
@@ -221,23 +274,70 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
             return div.innerHTML;
         }
 
-        function updateElementsJson() {
-        const elements = [];
-        templateElementsList.querySelectorAll('.element-item').forEach(item => {
-            const element = {
-                type: item.dataset.type,
-                value: item.dataset.value ?? ''
+        function promptSpecialGroup(currentKey) {
+            const optionKeys = Object.keys(SPECIAL_GROUP_OPTIONS);
+            const buildMessage = () => {
+                const rows = optionKeys.map((key, idx) => `${idx} — ${SPECIAL_GROUP_OPTIONS[key]}`);
+                rows.unshift('Выберите группу для роли (введите номер, пусто — без группы):');
+                return rows.join('\n');
             };
-            if (item.dataset.headingLevel && parseInt(item.dataset.headingLevel, 10) > 0) {
-                element.level = parseInt(item.dataset.headingLevel, 10);
+            while (true) {
+                const defaultValue = currentKey ? optionKeys.indexOf(currentKey) : '';
+                const input = prompt(buildMessage(), defaultValue !== -1 ? defaultValue : '');
+                if (input === null) {
+                    return null;
+                }
+                const trimmed = input.trim();
+                if (trimmed === '') {
+                    return '';
+                }
+                if (SPECIAL_GROUP_OPTIONS.hasOwnProperty(trimmed)) {
+                    return trimmed;
+                }
+                const asNumber = Number(trimmed);
+                if (Number.isInteger(asNumber) && asNumber >= 0 && asNumber < optionKeys.length) {
+                    return optionKeys[asNumber];
+                }
+                const normalized = trimmed.toLowerCase();
+                const matchedKey = optionKeys.find((key) => SPECIAL_GROUP_OPTIONS[key].toLowerCase() === normalized);
+                if (matchedKey) {
+                    return matchedKey;
+                }
+                alert('Не удалось определить группу. Укажите номер из списка.');
             }
-            if (item.dataset.type === 'role' && item.dataset.roleId) {
-                element.role_id = item.dataset.roleId;
-            }
-            elements.push(element);
-        });
-        elementsJsonInput.value = JSON.stringify(elements);
-    }
+        }
+
+        function updateRoleGroupIndicator(item) {
+            if (!item || item.dataset.type !== 'role') return;
+            const indicator = item.querySelector('.role-group-indicator');
+            if (!indicator) return;
+            const key = item.dataset.specialGroup || '';
+            indicator.textContent = `Группа: ${SPECIAL_GROUP_OPTIONS[key] || SPECIAL_GROUP_OPTIONS['']}`;
+        }
+
+        function updateElementsJson() {
+            const elements = [];
+            templateElementsList.querySelectorAll('.element-item').forEach(item => {
+                const element = {
+                    type: item.dataset.type,
+                    value: item.dataset.value ?? ''
+                };
+                if (item.dataset.headingLevel && parseInt(item.dataset.headingLevel, 10) > 0) {
+                    element.level = parseInt(item.dataset.headingLevel, 10);
+                }
+                if (item.dataset.type === 'role') {
+                    if (item.dataset.roleId) {
+                        element.role_id = item.dataset.roleId;
+                    }
+                    element.use_previous_cast = item.dataset.usePrevious === '1';
+                    if (item.dataset.specialGroup && item.dataset.specialGroup !== '') {
+                        element.special_group = item.dataset.specialGroup;
+                    }
+                }
+                elements.push(element);
+            });
+            elementsJsonInput.value = JSON.stringify(elements);
+        }
 
         document.getElementById('add-heading').addEventListener('click', () => {
             const headingText = prompt('Введите текст заголовка:');
@@ -283,6 +383,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
             });
         }
 
+        const addTicketButton = document.getElementById('add-ticket-button');
+        if (addTicketButton) {
+            addTicketButton.addEventListener('click', () => {
+                const customLink = prompt('Введите собственную ссылку (оставьте пустым, чтобы использовать код спектакля):', '');
+                const value = customLink ? customLink.trim() : '';
+                const newItem = createTemplateElement('ticket_button', value);
+                templateElementsList.appendChild(newItem);
+                updateElementsJson();
+            });
+        }
+
         templateElementsList.addEventListener('click', (event) => {
             const target = event.target;
             const item = target.closest('.element-item');
@@ -309,30 +420,74 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
                     newValue = prompt('Редактировать URL изображения:', item.dataset.value);
                 } else if (item.dataset.type === 'role') {
                     newValue = prompt('Редактировать название роли:', item.dataset.value);
+                } else if (item.dataset.type === 'ticket_button') {
+                    const currentValue = item.dataset.value || '';
+                    const inputValue = prompt('Редактировать ссылку на билеты (оставьте пустым для автоматической ссылки):', currentValue);
+                    if (inputValue !== null) {
+                        newValue = inputValue.trim();
+                    } else {
+                        newValue = null;
+                    }
                 } else if (item.dataset.type === 'newline') {
                     alert('Пустую строку редактировать не нужно. Вы можете удалить её и добавить заново.');
                     newValue = null;
                 }
 
-                if (newValue !== null && newValue !== '') {
-                    item.dataset.value = newValue.trim();
+                let specialGroupChoice = null;
+                if (item.dataset.type === 'role' && newValue !== null) {
+                    specialGroupChoice = promptSpecialGroup(item.dataset.specialGroup || '');
+                    if (specialGroupChoice === null) {
+                        specialGroupChoice = item.dataset.specialGroup || '';
+                    }
+                }
+
+                if (newValue !== null) {
+                    const trimmedValue = (newValue || '').trim();
+                    if (trimmedValue === '' && item.dataset.type !== 'ticket_button') {
+                        alert('Пустое значение недопустимо. Введите текст или отмените изменения.');
+                        return;
+                    }
+                    item.dataset.value = trimmedValue;
+                    if (item.dataset.type === 'role' && specialGroupChoice !== null) {
+                        item.dataset.specialGroup = specialGroupChoice;
+                    }
                     // roleId остаётся, чтобы обновлять существующие роли
                     const textSpan = item.querySelector('.element-text');
                     if (textSpan) {
                         if (item.dataset.type === 'role') {
-                            textSpan.textContent = newValue.trim();
+                            textSpan.textContent = trimmedValue;
                         } else if (item.dataset.type === 'heading') {
-                            textSpan.textContent = newValue;
+                            textSpan.textContent = trimmedValue;
                             const strong = item.querySelector('.content strong');
                             if (strong && item.dataset.headingLevel) {
                                 strong.textContent = `Заголовок (уровень ${item.dataset.headingLevel}):`;
                             }
+                        } else if (item.dataset.type === 'ticket_button') {
+                            textSpan.textContent = trimmedValue ? `Своя ссылка: ${trimmedValue}` : 'Авто: ссылка по коду спектакля';
                         } else {
-                            textSpan.textContent = newValue;
+                            textSpan.textContent = trimmedValue;
                         }
+                    }
+                    if (item.dataset.type === 'role') {
+                        updateRoleGroupIndicator(item);
                     }
                     updateElementsJson();
                 }
+            }
+        });
+
+        templateElementsList.addEventListener('change', (event) => {
+            const target = event.target;
+            if (target.classList.contains('toggle-use-previous')) {
+                const item = target.closest('.element-item');
+                if (!item) return;
+                item.dataset.usePrevious = target.checked ? '1' : '0';
+                updateElementsJson();
+            } else if (target.classList.contains('special-group-select')) {
+                const item = target.closest('.element-item');
+                if (!item) return;
+                item.dataset.specialGroup = target.value || '';
+                updateElementsJson();
             }
         });
 
@@ -348,6 +503,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
             }
             if (type === 'role') {
                 div.dataset.roleId = options.roleId || '';
+                div.dataset.usePrevious = options.usePreviousCast ? '1' : '0';
+                div.dataset.specialGroup = options.specialGroup || '';
+            } else {
+                div.dataset.usePrevious = '';
+                div.dataset.specialGroup = '';
             }
 
             let contentHtml = '';
@@ -358,9 +518,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
                 contentHtml = `<strong>Изображение:</strong> <span class="element-text">${escapeHtml(value)}</span>`;
             } else if (type === 'role') {
                 const displayText = value || (options.roleId ? `ID: ${options.roleId}` : '');
-                contentHtml = `<strong>Роль:</strong> <span class="element-text">${escapeHtml(displayText)}</span>`;
+                const checkedAttr = (div.dataset.usePrevious === '1') ? 'checked' : '';
+                const groupLabel = SPECIAL_GROUP_OPTIONS[div.dataset.specialGroup || ''] || SPECIAL_GROUP_OPTIONS[''];
+                contentHtml = `<strong>Роль:</strong> <span class="element-text">${escapeHtml(displayText)}</span>
+                    <div class="role-flags">
+                        <label class="use-previous-toggle">
+                            <input type="checkbox" class="toggle-use-previous" ${checkedAttr}>
+                            Брать предыдущий состав
+                        </label>
+                        <span class="role-group-indicator">Группа: ${escapeHtml(groupLabel)}</span>
+                    </div>`;
             } else if (type === 'newline') {
                 contentHtml = `<em>Пустая строка</em>`;
+            } else if (type === 'ticket_button') {
+                const text = value ? `Своя ссылка: ${escapeHtml(value)}` : 'Авто: ссылка по коду спектакля';
+                contentHtml = `<strong>Кнопка билетов:</strong> <span class="element-text">${text}</span>`;
             }
 
             div.innerHTML = `
@@ -371,6 +543,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
                     <button type="button" class="btn-icon btn-danger btn-delete-element" title="Удалить">🗑️</button>
                 </div>
             `;
+            updateRoleGroupIndicator(div);
             return div;
         }
 

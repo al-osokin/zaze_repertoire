@@ -102,10 +102,10 @@ class PlayTemplateParser
         return $elementsData; // Возвращаем пустой массив, так как элементы сохраняются напрямую
     }
 
-    private function saveTemplateElement(int $playId, string $elementType, string $elementValue, int $sortOrder, ?int $headingLevel = null): void
+    private function saveTemplateElement(int $playId, string $elementType, string $elementValue, int $sortOrder, ?int $headingLevel = null, bool $usePreviousCast = false): void
     {
-        $stmt = $this->pdo->prepare("INSERT INTO template_elements (play_id, element_type, element_value, sort_order, heading_level) VALUES (?, ?, ?, ?, ?)");
-        $stmt->execute([$playId, $elementType, $elementValue, $sortOrder, $headingLevel]);
+        $stmt = $this->pdo->prepare("INSERT INTO template_elements (play_id, element_type, element_value, use_previous_cast, sort_order, heading_level) VALUES (?, ?, ?, ?, ?, ?)");
+        $stmt->execute([$playId, $elementType, $elementValue, $usePreviousCast ? 1 : 0, $sortOrder, $headingLevel]);
     }
 
     private function findOrCreateRole(int $playId, string $roleName, string $expectedArtistType, int $sortOrder): int
