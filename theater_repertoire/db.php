@@ -457,6 +457,193 @@ function generateVkCard(int $performanceId): string {
     return $cardData['text'];
 }
 
+// === Temza helpers ===
+
+function getTemzaMonths(): array
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->query("SELECT DISTINCT month_label FROM temza_events ORDER BY month_label DESC");
+    return $stmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
+}
+
+function getTemzaTitleMappings(bool $onlyUnmapped = false): array
+{
+    $pdo = getDBConnection();
+    $sql = "
+        SELECT tt.id,
+               tt.temza_title,
+               tt.is_subscription,
+               tt.play_id,
+               tt.suggested_play_id,
+               tt.suggestion_confidence,
+               tt.is_confirmed,
+               p.site_title AS play_site_title,
+               p.full_name AS play_full_name,
+               p.short_name AS play_short_name,
+               sp.site_title AS suggested_site_title,
+               sp.full_name AS suggested_full_name,
+               sp.short_name AS suggested_short_name
+        FROM temza_titles tt
+        LEFT JOIN plays p ON p.id = tt.play_id
+        LEFT JOIN plays sp ON sp.id = tt.suggested_play_id
+    ";
+    if ($onlyUnmapped) {
+        $sql .= " WHERE tt.play_id IS NULL";
+    }
+    $sql .= " ORDER BY tt.temza_title";
+
+    $stmt = $pdo->query($sql);
+    return $stmt->fetchAll();
+}
+
+function updateTemzaTitleMapping(int $titleId, ?int $playId): bool
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("
+        UPDATE temza_titles
+           SET play_id = ?,
+               is_confirmed = ?,
+               updated_at = NOW()
+         WHERE id = ?
+    ");
+    $isConfirmed = $playId ? 1 : 0;
+    return $stmt->execute([$playId, $isConfirmed, $titleId]);
+}
+
+function applyTemzaSuggestion(int $titleId): bool
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("
+        UPDATE temza_titles
+           SET play_id = suggested_play_id,
+               is_confirmed = CASE WHEN suggested_play_id IS NULL THEN 0 ELSE 1 END,
+               updated_at = NOW()
+         WHERE id = ?
+           AND suggested_play_id IS NOT NULL
+    ");
+    $stmt->execute([$titleId]);
+    return $stmt->rowCount() > 0;
+}
+
+function parseTemzaMonthLabel(string $monthLabel): ?array
+{
+    if (preg_match('/^(\\d{4})-(\\d{2})$/', $monthLabel, $matches)) {
+        return ['year' => (int)$matches[1], 'month' => (int)$matches[2]];
+    }
+    return null;
+}
+
+function getTemzaEventsForMonth(string $monthLabel, bool $onlyUnmatched = false): array
+{
+    $pdo = getDBConnection();
+    $sql = "
+        SELECT
+            te.*,
+            tt.play_id AS mapped_play_id,
+            tt.is_subscription,
+            p.site_title AS mapped_play_site_title,
+            p.full_name AS mapped_play_full_name,
+            er.title AS matched_event_title,
+            er.event_date AS matched_event_date,
+            er.event_time AS matched_event_time,
+            er.play_id AS event_play_id,
+            ep.site_title AS event_play_site_title,
+            ep.full_name AS event_play_full_name
+        FROM temza_events te
+        LEFT JOIN temza_titles tt ON tt.id = te.temza_title_id
+        LEFT JOIN plays p ON p.id = tt.play_id
+        LEFT JOIN events_raw er ON er.id = te.matched_event_id
+        LEFT JOIN plays ep ON ep.id = er.play_id
+        WHERE te.month_label = ?
+    ";
+    if ($onlyUnmatched) {
+        $sql .= " AND te.matched_event_id IS NULL AND te.ignore_in_schedule = 0";
+    }
+    $sql .= "
+        ORDER BY
+            te.event_date IS NULL,
+            te.event_date,
+            te.start_time,
+            te.id
+    ";
+
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([$monthLabel]);
+    return $stmt->fetchAll();
+}
+
+function getEventsRawOptionsForMonth(string $monthLabel): array
+{
+    $parts = parseTemzaMonthLabel($monthLabel);
+    if (!$parts) {
+        return [];
+    }
+
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("
+        SELECT er.id,
+               er.event_date,
+               er.event_time,
+               er.title,
+               er.play_id,
+               p.site_title,
+               p.full_name
+        FROM events_raw er
+        LEFT JOIN plays p ON p.id = er.play_id
+        WHERE er.year = ? AND er.month = ?
+        ORDER BY er.event_date, er.event_time, er.id
+    ");
+    $stmt->execute([$parts['year'], $parts['month']]);
+    return $stmt->fetchAll();
+}
+
+function updateTemzaEventMatch(int $temzaEventId, ?int $eventId): bool
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("UPDATE temza_events SET matched_event_id = ?, updated_at = NOW() WHERE id = ?");
+    return $stmt->execute([$eventId, $temzaEventId]);
+}
+
+function getTemzaTitleStatsForMonth(string $monthLabel): array
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("
+        SELECT
+            temza_title_id,
+            MIN(event_date) AS min_date,
+            MIN(start_time) AS min_time,
+            COUNT(*) AS events_count
+        FROM temza_events
+        WHERE month_label = ?
+        GROUP BY temza_title_id
+    ");
+    $stmt->execute([$monthLabel]);
+    $stats = [];
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        if (!isset($row['temza_title_id'])) {
+            continue;
+        }
+        $stats[(int)$row['temza_title_id']] = [
+            'min_date' => $row['min_date'],
+            'min_time' => $row['min_time'],
+            'events_count' => (int)$row['events_count'],
+        ];
+    }
+    return $stats;
+}
+
+function updateTemzaEventIgnore(int $temzaEventId, bool $ignore): bool
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("
+        UPDATE temza_events
+           SET ignore_in_schedule = ?,
+               updated_at = NOW()
+         WHERE id = ?
+    ");
+    return $stmt->execute([$ignore ? 1 : 0, $temzaEventId]);
+}
+
 // === System Settings ===
 
 function getSystemSetting(string $key): ?string {
