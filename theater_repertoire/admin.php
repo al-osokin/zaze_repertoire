@@ -17,7 +17,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'wiki_link' => trim($_POST['wiki_link'] ?? ''),
             'hall' => trim($_POST['hall'] ?? ''),
             'special_mark' => trim($_POST['special_mark'] ?? ''),
-            'is_subscription' => $_POST['is_subscription'] ?? 0
+            'is_subscription' => $_POST['is_subscription'] ?? 0,
+            'is_concert_program' => $_POST['is_concert_program'] ?? 0,
         ];
 
         if (!empty($data['short_name']) && !empty($data['full_name']) && !empty($data['hall'])) {
@@ -92,7 +93,7 @@ if (isset($_GET['edit'])) {
                             <td><?php echo htmlspecialchars(formatPlayTitle($play['site_title'] ?? null, $play['full_name'] ?? null)); ?></td>
                             <td><?php echo htmlspecialchars($play['hall']); ?></td>
                             <td class="actions">
-                                <a href="admin.php?edit=<?php echo urlencode($play['short_name']); ?>" class="btn-icon btn-secondary btn-edit" title="Редактировать спектакль"></a>
+                                <a href="admin.php?edit=<?php echo urlencode($play['short_name']); ?>#play-form" class="btn-icon btn-secondary btn-edit" title="Редактировать спектакль"></a>
                                 <a href="roles_admin.php?play_id=<?php echo $play['id']; ?>" class="btn-icon btn-info btn-roles" title="Управление ролями"></a>
                                 <a href="template_editor.php?play_id=<?php echo $play['id']; ?>" class="btn-icon btn-primary btn-cast" title="Редактировать шаблон"></a>
                                 <button type="button" class="btn-icon btn-success btn-copy" title="Копировать шаблон" onclick="copyTemplate('<?php echo htmlspecialchars($play['short_name']); ?>')"></button>
@@ -107,7 +108,7 @@ if (isset($_GET['edit'])) {
             </table>
         </div>
 
-        <div class="section">
+        <div class="section" id="play-form">
             <h2><?php echo $editPlay ? 'Редактировать спектакль' : 'Добавить спектакль'; ?></h2>
             <form method="post" id="playForm">
                 <?php if ($editPlay): ?>
@@ -156,6 +157,14 @@ if (isset($_GET['edit'])) {
                         Это абонемент (использовать внешнюю ссылку на билеты)
                     </label>
                     <small class="form-hint">Отметьте, если это абонемент с внешней ссылкой на билеты</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="is_concert_program">
+                        <input type="checkbox" id="is_concert_program" name="is_concert_program" value="1" <?php echo ($editPlay['is_concert_program'] ?? 0) ? 'checked' : ''; ?>>
+                        Это концертная программа (список участников вместо ролей)
+                    </label>
+                    <small class="form-hint">Нужен для концертов вроде «Дирижёр — Дед Мороз», где карточка строится как перечень участников.</small>
                 </div>
 
                 <div class="buttons">

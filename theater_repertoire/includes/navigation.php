@@ -24,6 +24,8 @@ if (!function_exists('renderMainNavigation')) {
             'schedule' => ['label' => 'Афиша', 'href' => 'schedule.php'],
             'scraper'  => ['label' => 'Парсинг', 'href' => 'scraper.php'],
             'plays'    => ['label' => 'Спектакли', 'href' => 'admin.php'],
+            'temza'    => ['label' => 'Темза', 'href' => 'temza.php'],
+            'temza_roles' => ['label' => 'Темза роли', 'href' => 'temza_roles.php'],
         ];
 
         $activeKey = $activeKey ?: pathinfo($_SERVER['PHP_SELF'] ?? '', PATHINFO_FILENAME);
