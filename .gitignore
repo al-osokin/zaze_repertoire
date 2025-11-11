@@ -29,7 +29,7 @@ session_*
 uploads/
 files/
 storage/
-scraper/output
+temza_scraper/output
 
 # Бэкапы баз данных
 *.sql.bak
