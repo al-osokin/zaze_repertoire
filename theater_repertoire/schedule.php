@@ -25,11 +25,35 @@ $stmt = $pdo->prepare("
                   OR (pra.custom_artist_name IS NOT NULL AND pra.custom_artist_name <> '')
               )
         ) AS filled_roles_count,
-        (SELECT COUNT(*) FROM roles r WHERE r.play_id = er.play_id) AS total_roles_count
+        (SELECT COUNT(*) FROM roles r WHERE r.play_id = er.play_id) AS total_roles_count,
+        te.id AS temza_event_id,
+        te.status AS temza_status,
+        te.published_at AS temza_published_at,
+        te.published_by AS temza_published_by,
+        te.month_label AS temza_month,
+        tt.play_id AS temza_play_id,
+        te.scraped_at AS temza_scraped_at,
+        COALESCE(tcr.cast_total, 0) AS temza_cast_total,
+        tcr.pending_count AS temza_pending_roles,
+        tcl.last_change_at AS temza_last_change_at
     FROM
         events_raw er
     JOIN
         plays p ON er.play_id = p.id
+    LEFT JOIN temza_events te ON te.matched_event_id = er.id
+    LEFT JOIN temza_titles tt ON tt.id = te.temza_title_id
+    LEFT JOIN (
+        SELECT temza_event_id,
+               COUNT(*) AS cast_total,
+               SUM(status = 'pending') AS pending_count
+        FROM temza_cast_resolved
+        GROUP BY temza_event_id
+    ) tcr ON tcr.temza_event_id = te.id
+    LEFT JOIN (
+        SELECT temza_event_id, MAX(created_at) AS last_change_at
+        FROM temza_change_log
+        GROUP BY temza_event_id
+    ) tcl ON tcl.temza_event_id = te.id
     WHERE
         MONTH(er.event_date) = ? AND YEAR(er.event_date) = ?
     ORDER BY
@@ -47,6 +71,37 @@ $performances = $stmt->fetchAll();
     <link rel="stylesheet" href="css/main.css">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="app/globals.css">
+    <style>
+        .status-label {
+            display: inline-flex;
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        .status-filled {
+            background: #dcfce7;
+            color: #15803d;
+        }
+        .status-pending,
+        .status-note-warn {
+            background: #fef9c3;
+            color: #92400e;
+        }
+        .status-changed,
+        .status-note-danger {
+            background: #fee2e2;
+            color: #b91c1c;
+        }
+        .status-note {
+            margin-top: 4px;
+            font-size: 0.8rem;
+            color: #6b7280;
+        }
+        .status-note-ok {
+            color: #15803d;
+        }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -84,14 +139,42 @@ $performances = $stmt->fetchAll();
                         <td><?php echo htmlspecialchars($playTitle); ?></td>
                         <td>
                             <?php
-                                if ($performance['total_roles_count'] == 0) {
-                                    echo "Роли не определены";
-                                } elseif ($performance['filled_roles_count'] == 0) {
-                                    echo "Не заполнено";
-                                } elseif ($performance['filled_roles_count'] < $performance['total_roles_count']) {
-                                    echo "Частично (" . $performance['filled_roles_count'] . "/" . $performance['total_roles_count'] . ")";
+                                $temzaCastTotal = (int)($performance['temza_cast_total'] ?? 0);
+                                if ($temzaCastTotal > 0) {
+                                    $pendingRoles = (int)($performance['temza_pending_roles'] ?? 0);
+                                    $publishedAt = $performance['temza_published_at'] ?? null;
+                                    $lastChangeAt = $performance['temza_last_change_at'] ?? null;
+                                    $publishedTs = $publishedAt ? strtotime($publishedAt) : null;
+                                    $changeTs = $lastChangeAt ? strtotime($lastChangeAt) : null;
+                                    $hasChangesAfterPublish = $changeTs && (!$publishedTs || $changeTs > $publishedTs);
+
+                                    if ($pendingRoles > 0) {
+                                        echo "<div class='status-label status-pending'>Требует подтверждения</div>";
+                                        echo "<div class='status-note status-note-warn'>Не сопоставлено {$pendingRoles} ролей</div>";
+                                    } elseif ($hasChangesAfterPublish) {
+                                        $noteText = $publishedAt
+                                            ? 'Нужно перепубликовать (посл. отправка ' . date('d.m.Y', strtotime($publishedAt)) . ')'
+                                            : 'Не опубликовано';
+                                        echo "<div class='status-label status-changed'>Изменено</div>";
+                                        echo "<div class='status-note status-note-danger'>" . htmlspecialchars($noteText) . "</div>";
+                                    } else {
+                                        echo "<div class='status-label status-filled'>Заполнено</div>";
+                                        if ($publishedAt) {
+                                            echo "<div class='status-note status-note-ok'>Опубликовано " . htmlspecialchars(date('d.m.Y', strtotime($publishedAt))) . "</div>";
+                                        } else {
+                                            echo "<div class='status-note status-note-warn'>Не опубликовано</div>";
+                                        }
+                                    }
                                 } else {
-                                    echo "Заполнено";
+                                    if ($performance['total_roles_count'] == 0) {
+                                        echo "Роли не определены";
+                                    } elseif ($performance['filled_roles_count'] == 0) {
+                                        echo "Не заполнено";
+                                    } elseif ($performance['filled_roles_count'] < $performance['total_roles_count']) {
+                                        echo "Частично (" . $performance['filled_roles_count'] . "/" . $performance['total_roles_count'] . ")";
+                                    } else {
+                                        echo "Заполнено";
+                                    }
                                 }
                             ?>
                         </td>
