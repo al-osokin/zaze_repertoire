@@ -37,6 +37,7 @@ temza_scraper/output
 *.sql.bak
 *.dump
 *dump.sql
+zaze_repertoire_dump_*.sql
 
 # Node.js (если используется)
 node_modules/
