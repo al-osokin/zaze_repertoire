@@ -1,6 +1,8 @@
 # Конфигурационные файлы с чувствительной информацией
 config.php
 vk_config.php
+.env
+temza_scraper/.env
 
 # Логи и временные файлы
 *.log
@@ -35,6 +37,7 @@ temza_scraper/output
 *.sql.bak
 *.dump
 *dump.sql
+zaze_repertoire_dump_*.sql
 
 # Node.js (если используется)
 node_modules/
