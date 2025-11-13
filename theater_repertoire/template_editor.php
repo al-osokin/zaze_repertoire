@@ -77,6 +77,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
                 }
             }
             $message = 'Шаблон успешно сохранен.';
+            ensurePerformanceRolesForPlay((int)$playId);
             $templateElements = getTemplateElementsForPlay($playId); // Обновляем список элементов
         } else {
             $message = 'Ошибка при сохранении шаблона: неверные данные.';
@@ -88,6 +89,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
             saveTemplateElement($playId, 'heading', 'В ролях:', 0, 2);
             saveTemplateElement($playId, 'heading', 'СОСТАВ УТОЧНЯЕТСЯ', 1, 3);
             saveTemplateElement($playId, 'image', 'default_image.jpg', 2); // Пример
+            ensurePerformanceRolesForPlay((int)$playId);
             $message = 'Добавлен минимальный шаблон.';
             $templateElements = getTemplateElementsForPlay($playId);
         } else {
@@ -101,6 +103,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $playId) {
         } else {
             $parser = new PlayTemplateParser(getDBConnection());
             $parser->parseTemplate((int)$playId, $templateText);
+            ensurePerformanceRolesForPlay((int)$playId);
             $templateElements = getTemplateElementsForPlay($playId);
             $message = 'Шаблон перепарсен из текстового варианта.';
         }

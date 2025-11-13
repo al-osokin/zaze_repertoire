@@ -127,6 +127,23 @@ function deleteTemplateElementsByPlayId(int $playId): void {
     $stmt->execute([$playId]);
 }
 
+function ensurePerformanceRolesForPlay(int $playId): void
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("
+        INSERT INTO performance_roles_artists (performance_id, role_id, artist_id, custom_artist_name, sort_order_in_role)
+        SELECT er.id, r.role_id, NULL, '-- СОСТАВ УТОЧНЯЕТСЯ --', 0
+        FROM roles r
+        JOIN events_raw er ON er.play_id = r.play_id
+        LEFT JOIN performance_roles_artists pra
+               ON pra.performance_id = er.id
+              AND pra.role_id = r.role_id
+        WHERE r.play_id = ?
+          AND pra.performance_id IS NULL
+    ");
+    $stmt->execute([$playId]);
+}
+
 function getTemplateByPlayId(int $playId): ?array {
     $pdo = getDBConnection();
     $stmt = $pdo->prepare("SELECT * FROM play_templates WHERE play_id = ?");
@@ -414,8 +431,10 @@ function buildPerformanceCard(int $performanceId, bool $includePhoto = true): ar
     ");
     $rolesStmt->execute([$performanceId]);
     $castData = $rolesStmt->fetchAll();
+    $temzaDebutMap = buildTemzaDebutMapForPerformance($performanceId);
 
     $groupedCast = [];
+    $hasActualArtists = false;
     foreach ($castData as $cast) {
         // Нормализуем имя роли для ключа группировки
         $normalizedRoleName = normalizeRoleName($cast['role_name']);
@@ -426,17 +445,33 @@ function buildPerformanceCard(int $performanceId, bool $includePhoto = true): ar
             ];
         }
 
-        $firstTimeSuffix = !empty($cast['is_first_time']) ? " (''впервые в роли'')" : '';
+        $isFirstTime = !empty($cast['is_first_time']);
+        if (!$isFirstTime && $temzaDebutMap) {
+            $roleId = (int)$cast['role_id'];
+            $candidateName = '';
+            if (!empty($cast['artist_id'])) {
+                $candidateName = trim((string)(($cast['first_name'] ?? '') . ' ' . ($cast['last_name'] ?? '')));
+            } elseif (!empty($cast['custom_artist_name'])) {
+                $candidateName = (string)$cast['custom_artist_name'];
+            }
+            $normalizedCandidate = normalizeArtistLabelForComparison($candidateName);
+            if ($normalizedCandidate !== '' && !empty($temzaDebutMap[$roleId][$normalizedCandidate])) {
+                $isFirstTime = true;
+            }
+        }
+        $firstTimeSuffix = $isFirstTime ? " (''впервые в роли'')" : '';
 
         if (!empty($cast['artist_id'])) {
             $artistName = trim(($cast['first_name'] ?? '') . ' ' . ($cast['last_name'] ?? ''));
             if ($artistName !== '') {
                 $groupedCast[$normalizedRoleName]['artists'][] = $artistName . $firstTimeSuffix;
+                $hasActualArtists = true;
             }
         } elseif (!empty($cast['custom_artist_name'])) {
             $customName = trim($cast['custom_artist_name']);
-            if ($customName !== '' && mb_strtoupper($customName, 'UTF-8') !== 'СОСТАВ УТОЧНЯЕТСЯ') {
+            if ($customName !== '' && !isPlaceholderArtistName($customName)) {
                 $groupedCast[$normalizedRoleName]['artists'][] = $customName . $firstTimeSuffix;
+                $hasActualArtists = true;
             }
         }
     }
@@ -488,7 +523,10 @@ function buildPerformanceCard(int $performanceId, bool $includePhoto = true): ar
     }
 
     $result['text'] = implode("\n", $lines);
-    $result['has_artists'] = true;
+    $result['has_artists'] = $hasActualArtists;
+    if (!$hasActualArtists) {
+        $result['text'] = '';
+    }
 
     return $result;
 }
@@ -1899,6 +1937,13 @@ function diffTemzaCast(array $oldCast, array $newCast, array $roleLabels): array
     return $changes;
 }
 
+function isPlaceholderArtistName(string $name): bool
+{
+    $normalized = mb_strtoupper(trim($name), 'UTF-8');
+    $normalized = preg_replace('/[^А-ЯЁA-Z]/u', '', $normalized);
+    return $normalized === 'СОСТАВУТОЧНЯЕТСЯ';
+}
+
 function insertTemzaChangeLog(PDO $pdo, int $temzaEventId, array $changes): void
 {
     $stmt = $pdo->prepare("
@@ -2092,6 +2137,76 @@ function splitManualNameTokens(string $value): array
         $result[] = $part;
     }
     return $result;
+}
+
+function buildTemzaDebutMapForPerformance(int $performanceId): array
+{
+    $pdo = getDBConnection();
+    $eventStmt = $pdo->prepare("
+        SELECT id
+        FROM temza_events
+        WHERE matched_event_id = ?
+        ORDER BY scraped_at DESC, updated_at DESC, id DESC
+        LIMIT 1
+    ");
+    $eventStmt->execute([$performanceId]);
+    $temzaEventId = $eventStmt->fetchColumn();
+    if (!$temzaEventId) {
+        return [];
+    }
+
+    $debutStmt = $pdo->prepare("
+        SELECT mapped_role_id, temza_actor
+        FROM temza_cast_resolved
+        WHERE temza_event_id = ?
+          AND is_debut = 1
+          AND mapped_role_id IS NOT NULL
+          AND temza_actor IS NOT NULL
+          AND temza_actor <> ''
+    ");
+    $debutStmt->execute([$temzaEventId]);
+
+    $map = [];
+    while ($row = $debutStmt->fetch(PDO::FETCH_ASSOC)) {
+        $roleId = (int)$row['mapped_role_id'];
+        $tokens = extractNormalizedArtistTokens((string)$row['temza_actor']);
+        if (!$tokens) {
+            continue;
+        }
+        if (!isset($map[$roleId])) {
+            $map[$roleId] = [];
+        }
+        foreach ($tokens as $token) {
+            $map[$roleId][$token] = true;
+        }
+    }
+
+    return $map;
+}
+
+function extractNormalizedArtistTokens(string $value): array
+{
+    $tokens = splitManualNameTokens($value);
+    if (!$tokens) {
+        return [];
+    }
+    $result = [];
+    foreach ($tokens as $token) {
+        $normalized = normalizeArtistLabelForComparison($token);
+        if ($normalized !== '') {
+            $result[$normalized] = true;
+        }
+    }
+    return array_keys($result);
+}
+
+function normalizeArtistLabelForComparison(string $value): string
+{
+    $value = str_replace(["'''", "''"], '', $value);
+    $value = preg_replace('/\(.*?\)/u', '', $value);
+    $value = str_replace(['ё', 'Ё'], ['е', 'Е'], $value);
+    $value = trim(preg_replace('/\s+/u', ' ', $value));
+    return mb_strtoupper($value, 'UTF-8');
 }
 
 // === System Settings ===

@@ -65,7 +65,7 @@ function temzaParseMonthsInput(string $input): array
 
 function temzaRunScraper(array $monthLabels): array
 {
-    $scraperDir = realpath(__DIR__ . '/../temza_scraper');
+    $scraperDir = TEMZA_SCRAPER_DIR ? (is_dir(TEMZA_SCRAPER_DIR) ? TEMZA_SCRAPER_DIR : realpath(TEMZA_SCRAPER_DIR)) : null;
     if (!$scraperDir || !is_dir($scraperDir)) {
         throw new RuntimeException('Каталог temza_scraper не найден.');
     }
@@ -105,8 +105,8 @@ function temzaRunScraper(array $monthLabels): array
 
 function temzaRunImporter(array $monthLabels): array
 {
-    $theaterDir = realpath(__DIR__);
-    $scraperOutputDir = realpath(__DIR__ . '/../temza_scraper/output');
+    $theaterDir = THEATER_APP_DIR ? (is_dir(THEATER_APP_DIR) ? THEATER_APP_DIR : realpath(THEATER_APP_DIR)) : null;
+    $scraperOutputDir = TEMZA_OUTPUT_DIR ? (is_dir(TEMZA_OUTPUT_DIR) ? TEMZA_OUTPUT_DIR : realpath(TEMZA_OUTPUT_DIR)) : null;
     if (!$theaterDir || !$scraperOutputDir) {
         throw new RuntimeException('Не найдены директории проекта или выгрузки Temza.');
     }
@@ -125,7 +125,8 @@ function temzaRunImporter(array $monthLabels): array
         $filePaths[] = $file;
     }
 
-    $cmdParts = array_merge([PHP_BINARY, $scriptPath], $filePaths);
+    $phpBinary = defined('PHP_CLI_BINARY') ? PHP_CLI_BINARY : (PHP_BINARY ?: '/usr/bin/php');
+    $cmdParts = array_merge([$phpBinary, $scriptPath], $filePaths);
     $command = implode(' ', array_map('escapeshellarg', $cmdParts));
 
     $descriptorSpec = [
@@ -160,8 +161,7 @@ function temzaRunImporter(array $monthLabels): array
 
 function temzaCollectScrapeSummaries(array $monthLabels): array
 {
-    $scraperDir = realpath(__DIR__ . '/../temza_scraper');
-    $outputDir = $scraperDir ? $scraperDir . '/output' : null;
+    $outputDir = TEMZA_OUTPUT_DIR ? (is_dir(TEMZA_OUTPUT_DIR) ? TEMZA_OUTPUT_DIR : realpath(TEMZA_OUTPUT_DIR)) : null;
     $summaries = [];
 
     foreach ($monthLabels as $label) {
@@ -213,7 +213,7 @@ $scrapeMonthsPreset = $_SESSION['temza_last_months'] ?? 'current,next';
 $importSummary = $_SESSION['temza_import_summary'] ?? null;
 unset($_SESSION['temza_import_summary']);
 $importMonthsPreset = $_SESSION['temza_last_import_months'] ?? $currentMonth;
-$projectRoot = realpath(__DIR__ . '/..');
+$projectRoot = PROJECT_ROOT;
 $changeLogs = [];
 
 $errors = [];
@@ -222,6 +222,50 @@ function temzaRedirect(string $query = ''): void
 {
     $location = 'temza.php' . ($query ? '?' . $query : '');
     header("Location: {$location}");
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax']) && $_POST['ajax'] === '1') {
+    header('Content-Type: application/json');
+    try {
+        $action = $_POST['action'] ?? '';
+        $temzaEventId = (int)($_POST['temza_event_id'] ?? 0);
+        $userId = $_SESSION['user_id'] ?? null;
+
+        if ($temzaEventId <= 0) {
+            throw new RuntimeException('Некорректный идентификатор события Temza.');
+        }
+        if (!$userId) {
+            throw new RuntimeException('Необходимо авторизоваться.');
+        }
+
+        if ($action === 'publish_event') {
+            if (!publishTemzaEvent($temzaEventId, (int)$userId)) {
+                throw new RuntimeException('Не удалось отметить событие как опубликованное.');
+            }
+        } elseif ($action === 'reset_event_publish') {
+            if (!resetTemzaEventPublication($temzaEventId)) {
+                throw new RuntimeException('Не удалось снять отметку публикации.');
+            }
+        } else {
+            throw new RuntimeException('Неизвестное действие.');
+        }
+
+        $state = temzaBuildPublishStatePayload($temzaEventId);
+        echo json_encode([
+            'success' => true,
+            'published' => $state['published'],
+            'badge' => $state['badge'],
+            'published_at' => $state['published_at'],
+            'published_by' => $state['published_by'],
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    } catch (Throwable $e) {
+        http_response_code(400);
+        echo json_encode([
+            'success' => false,
+            'message' => $e->getMessage(),
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
     exit;
 }
 
@@ -454,6 +498,16 @@ function temzaFormatTime(?string $time): string
     return substr($time, 0, 5);
 }
 
+function temzaFormatPublishedBadge(?string $publishedAt, ?string $username): ?string
+{
+    if (!$publishedAt) {
+        return null;
+    }
+    $date = date('d.m.Y', strtotime($publishedAt));
+    $suffix = $username ? ' · ' . $username : '';
+    return sprintf('Отправлено %s%s', $date, $suffix);
+}
+
 function temzaFormatEventOption(array $option): string
 {
     $date = temzaFormatDate($option['event_date'] ?? null);
@@ -474,6 +528,35 @@ function temzaCleanTitle(?string $title): string
     $clean = preg_replace('/^(сп\.|абонемент)(\s*\(\d+\))?\s*/iu', '', $title);
     $clean = trim($clean);
     return $clean !== '' ? $clean : trim($title);
+}
+
+function temzaBuildPublishStatePayload(int $temzaEventId): array
+{
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("
+        SELECT te.id, te.published_at, te.published_by, u.username
+        FROM temza_events te
+        LEFT JOIN users u ON u.id = te.published_by
+        WHERE te.id = ?
+    ");
+    $stmt->execute([$temzaEventId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$row) {
+        return [
+            'published' => false,
+            'badge' => null,
+            'published_at' => null,
+            'published_by' => null,
+        ];
+    }
+
+    $badge = temzaFormatPublishedBadge($row['published_at'] ?? null, $row['username'] ?? null);
+    return [
+        'published' => !empty($row['published_at']),
+        'badge' => $badge,
+        'published_at' => $row['published_at'],
+        'published_by' => $row['username'] ?? null,
+    ];
 }
 
 usort($eventRows, function (array $a, array $b): int {
@@ -1008,18 +1091,28 @@ usort($eventRows, function (array $a, array $b): int {
                     $titleDisplay = $playLabel !== '—'
                         ? $playLabel
                         : temzaCleanTitle($preview['temza_title'] ?? $preview['original_temza_title'] ?? '');
+                    $cardPlayTitle = $titleDisplay ?: 'Спектакль';
                     $cardData = $preview['card'] ?? ['text' => null, 'warnings' => [], 'has_data' => false];
-                    $publishedBadge = $preview['published_at']
-                        ? sprintf(
-                            'Отправлено %s%s',
-                            temzaFormatDate(substr($preview['published_at'], 0, 10)),
-                            $preview['published_by_username'] ? ' · ' . $preview['published_by_username'] : ''
-                        )
-                        : null;
+                    $publishedBadge = temzaFormatPublishedBadge($preview['published_at'] ?? null, $preview['published_by_username'] ?? null);
                     $eventChanges = $changeLogs[(int)$preview['id']] ?? [];
                     $isCancelled = ($preview['status'] ?? '') === 'cancelled';
+                    $performanceId = $preview['matched_event_id'] ?? null;
+                    $publishDisabled = $isCancelled || !empty($cardData['warnings']) || !$performanceId;
+                    $publishTitle = '';
+                    if ($publishDisabled) {
+                        $publishTitle = $isCancelled
+                            ? 'Нельзя отправить: отмена спектакля'
+                            : (!empty($cardData['warnings'])
+                                ? 'Нельзя отправить: есть несопоставленные роли'
+                                : (!$performanceId ? 'Событие не сопоставлено с афишей' : ''));
+                    }
                 ?>
-                <div class="temza-review-card <?php echo $preview['published_at'] ? 'is-approved' : ''; ?>">
+                <div class="temza-review-card <?php echo $preview['published_at'] ? 'is-approved' : ''; ?>"
+                     data-temza-event-id="<?php echo (int)$preview['id']; ?>"
+                     data-performance-id="<?php echo $performanceId ? (int)$performanceId : ''; ?>"
+                     data-play-title="<?php echo htmlspecialchars($cardPlayTitle, ENT_QUOTES, 'UTF-8'); ?>"
+                     data-publish-disabled="<?php echo $publishDisabled ? '1' : '0'; ?>"
+                     data-publish-disabled-title="<?php echo htmlspecialchars($publishTitle, ENT_QUOTES, 'UTF-8'); ?>">
                     <div class="temza-card-meta">
                         <div>
                             <strong>
@@ -1035,28 +1128,29 @@ usort($eventRows, function (array $a, array $b): int {
                             <?php if ($isCancelled): ?>
                                 <div class="status-badge status-danger" style="margin-top: 6px;">Отмена</div>
                             <?php endif; ?>
-                            <?php if ($publishedBadge): ?>
-                                <div class="status-badge status-ok" style="margin-top: 6px;"><?php echo htmlspecialchars($publishedBadge); ?></div>
-                            <?php endif; ?>
-                        </div>
-                        <div class="temza-card-actions">
-                            <form method="post" style="display: inline-block;">
-                                <input type="hidden" name="redirect" value="<?php echo htmlspecialchars($redirectQuery); ?>">
-                                <input type="hidden" name="temza_event_id" value="<?php echo (int)$preview['id']; ?>">
-                                <?php if ($preview['published_at']): ?>
-                                    <input type="hidden" name="action" value="reset_event_publish">
-                                    <button type="submit" class="btn-secondary">Снять отметку</button>
-                                <?php else: ?>
-                                    <input type="hidden" name="action" value="publish_event">
-                                    <button type="submit" class="btn-success"
-                                        <?php
-                                            $publishDisabled = $isCancelled || !empty($cardData['warnings']);
-                                            echo $publishDisabled ? 'disabled title="Нельзя отправить: ' . ($isCancelled ? 'отмена спектакля' : 'есть несопоставленные роли') . '"' : '';
-                                        ?>>
-                                        Отправить в VK
-                                    </button>
+                            <div class="temza-publish-badge" data-publish-badge>
+                                <?php if ($publishedBadge): ?>
+                                    <div class="status-badge status-ok" style="margin-top: 6px;"><?php echo htmlspecialchars($publishedBadge); ?></div>
                                 <?php endif; ?>
-                            </form>
+                            </div>
+                        </div>
+                        <div class="temza-card-actions" data-publish-actions>
+                            <?php if ($preview['published_at']): ?>
+                                <button type="button"
+                                        class="btn-secondary temza-reset-btn"
+                                        data-temza-event-id="<?php echo (int)$preview['id']; ?>">
+                                    Снять отметку
+                                </button>
+                            <?php else: ?>
+                                <button type="button"
+                                        class="btn-success temza-publish-btn"
+                                        data-performance-id="<?php echo $performanceId ? (int)$performanceId : ''; ?>"
+                                        data-temza-event-id="<?php echo (int)$preview['id']; ?>"
+                                        data-play-title="<?php echo htmlspecialchars($cardPlayTitle, ENT_QUOTES, 'UTF-8'); ?>"
+                                    <?php echo $publishDisabled ? 'disabled title="' . htmlspecialchars($publishTitle, ENT_QUOTES, 'UTF-8') . '"' : ''; ?>>
+                                    Отправить в VK
+                                </button>
+                            <?php endif; ?>
                         </div>
                     </div>
                     <?php if (!empty($cardData['warnings'])): ?>
@@ -1098,5 +1192,190 @@ usort($eventRows, function (array $a, array $b): int {
         </div>
     <?php endif; ?>
 </div>
+<script>
+(function() {
+    document.addEventListener('click', async (event) => {
+        const publishButton = event.target.closest('.temza-publish-btn');
+        if (publishButton) {
+            event.preventDefault();
+            await handleTemzaPublish(publishButton);
+            return;
+        }
+
+        const resetButton = event.target.closest('.temza-reset-btn');
+        if (resetButton) {
+            event.preventDefault();
+            await handleTemzaReset(resetButton);
+        }
+    });
+
+    async function handleTemzaPublish(button) {
+        if (button.disabled) {
+            return;
+        }
+        const performanceId = button.dataset.performanceId;
+        const temzaEventId = button.dataset.temzaEventId;
+        const playTitle = button.dataset.playTitle || 'спектакль';
+        const card = button.closest('.temza-review-card');
+
+        if (!performanceId) {
+            showToast('Событие не сопоставлено с афишей.', 'error');
+            return;
+        }
+        if (!temzaEventId || !card) {
+            showToast('Не найдено событие Temza.', 'error');
+            return;
+        }
+
+        const originalText = button.textContent;
+        button.disabled = true;
+        button.textContent = 'Публикуем...';
+        try {
+            const vkResponse = await fetch('publish_to_vk.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                credentials: 'same-origin',
+                body: JSON.stringify({ performance_id: performanceId }),
+            });
+            if (!vkResponse.ok) {
+                throw new Error(`VK HTTP ${vkResponse.status}`);
+            }
+            const vkData = await vkResponse.json();
+            if (!vkData.success) {
+                throw new Error(vkData.message || 'Ошибка публикации в VK');
+            }
+
+            const state = await toggleTemzaPublishState('publish_event', temzaEventId);
+            applyTemzaPublishState(card, state);
+            showToast(`Карточка для "${playTitle}" опубликована.`, 'success');
+        } catch (error) {
+            console.error(error);
+            showToast(error.message || 'Ошибка публикации', 'error');
+            button.disabled = false;
+            button.textContent = originalText;
+        }
+    }
+
+    async function handleTemzaReset(button) {
+        if (button.disabled) {
+            return;
+        }
+        const temzaEventId = button.dataset.temzaEventId;
+        const card = button.closest('.temza-review-card');
+        if (!temzaEventId || !card) {
+            showToast('Не найдено событие Temza.', 'error');
+            return;
+        }
+
+        const originalText = button.textContent;
+        button.disabled = true;
+        button.textContent = 'Снимаем...';
+        try {
+            const state = await toggleTemzaPublishState('reset_event_publish', temzaEventId);
+            applyTemzaPublishState(card, state);
+            showToast('Отметка о публикации снята.', 'success');
+        } catch (error) {
+            console.error(error);
+            showToast(error.message || 'Не удалось снять отметку', 'error');
+            button.disabled = false;
+            button.textContent = originalText;
+        }
+    }
+
+    async function toggleTemzaPublishState(action, temzaEventId) {
+        const formData = new FormData();
+        formData.append('ajax', '1');
+        formData.append('action', action);
+        formData.append('temza_event_id', temzaEventId);
+
+        const response = await fetch('temza.php', {
+            method: 'POST',
+            credentials: 'same-origin',
+            body: formData,
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        if (!data.success) {
+            throw new Error(data.message || 'Не удалось обновить статус');
+        }
+        return data;
+    }
+
+    function applyTemzaPublishState(card, state) {
+        const badgeContainer = card.querySelector('[data-publish-badge]');
+        if (badgeContainer) {
+            badgeContainer.innerHTML = '';
+            if (state.published && state.badge) {
+                const badge = document.createElement('div');
+                badge.className = 'status-badge status-ok';
+                badge.style.marginTop = '6px';
+                badge.textContent = state.badge;
+                badgeContainer.appendChild(badge);
+            }
+        }
+
+        const actionsContainer = card.querySelector('[data-publish-actions]');
+        if (actionsContainer) {
+            actionsContainer.innerHTML = '';
+            if (state.published) {
+                card.classList.add('is-approved');
+                actionsContainer.appendChild(createResetButton(card));
+            } else {
+                card.classList.remove('is-approved');
+                actionsContainer.appendChild(createPublishButton(card));
+            }
+        }
+    }
+
+    function createResetButton(card) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn-secondary temza-reset-btn';
+        button.dataset.temzaEventId = card.dataset.temzaEventId;
+        button.textContent = 'Снять отметку';
+        return button;
+    }
+
+    function createPublishButton(card) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn-success temza-publish-btn';
+        button.dataset.temzaEventId = card.dataset.temzaEventId;
+        button.dataset.performanceId = card.dataset.performanceId || '';
+        button.dataset.playTitle = card.dataset.playTitle || 'спектакль';
+        const publishDisabled = card.dataset.publishDisabled === '1';
+        if (publishDisabled) {
+            button.disabled = true;
+            if (card.dataset.publishDisabledTitle) {
+                button.title = card.dataset.publishDisabledTitle;
+            }
+        }
+        button.textContent = 'Отправить в VK';
+        return button;
+    }
+
+    function showToast(message, type = 'success') {
+        const existingToast = document.querySelector('.toast');
+        if (existingToast) {
+            existingToast.remove();
+        }
+
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        toast.textContent = message;
+        document.body.appendChild(toast);
+
+        setTimeout(() => toast.classList.add('show'), 10);
+        setTimeout(() => {
+            toast.classList.remove('show');
+            setTimeout(() => toast.remove(), 300);
+        }, 3000);
+    }
+})();
+</script>
 </body>
 </html>
